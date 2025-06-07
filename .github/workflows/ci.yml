@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '15.0'
+        
+    - name: Swift version
+      run: swift --version
+      
+    - name: Cache Swift Package Manager
+      uses: actions/cache@v3
+      with:
+        path: .build
+        key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+        restore-keys: |
+          ${{ runner.os }}-spm-
+          
+    - name: Resolve dependencies
+      run: swift package resolve
+      
+    - name: Build project
+      run: swift build --configuration release
+      
+    - name: Run tests
+      run: swift test
+      
+    - name: Check code formatting
+      run: |
+        # Install SwiftFormat if needed
+        # swiftformat --lint Sources/
+        
+    - name: Security scan
+      run: |
+        # Add security scanning tools if needed
+        echo "Security scan placeholder"
+        
+  lint:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '15.0'
+        
+    - name: SwiftLint
+      run: |
+        # Install and run SwiftLint
+        if which swiftlint >/dev/null; then
+          swiftlint
+        else
+          echo "SwiftLint not installed, skipping..."
+        fi 
