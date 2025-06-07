@@ -133,8 +133,6 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         configuration.queueDepth = 8
         
-        print("🔊 ScreenCaptureKit配置: 采样率=\(configuration.sampleRate)Hz, 声道数=\(configuration.channelCount)")
-        
         if #available(macOS 15.0, *) {
             if let defaultMicrophone = AVCaptureDevice.default(for: .audio) {
                 configuration.captureMicrophone = true
@@ -145,11 +143,9 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         
         captureStream = SCStream(filter: filter, configuration: configuration, delegate: self)
         
-        print("📡 添加音频输出流...")
         try captureStream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue.global(qos: .userInteractive))
         
         if #available(macOS 15.0, *) {
-            print("📡 添加麦克风输出流...")
             try captureStream?.addStreamOutput(self, type: .microphone, sampleHandlerQueue: DispatchQueue.global(qos: .userInteractive))
         }
         
@@ -160,7 +156,6 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
     
     private func setupMicrophoneCapture() async throws {
         if #unavailable(macOS 15.0) {
-            print("🎤 使用AVAudioEngine捕获麦克风 (macOS < 15.0)")
             micAudioEngine = AVAudioEngine()
             
             guard let micAudioEngine = micAudioEngine else { return }
@@ -190,11 +185,8 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         let frameCount = Int(buffer.frameLength)
         let audioData = Array(UnsafeBufferPointer(start: channelData, count: frameCount)).map(Double.init)
         
-        // 计算音频强度用于调试
+        // 计算音频强度
         let rms = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
-        if rms > 0.001 { // 只在有声音时打印
-            print("🎤 麦克风音频: 帧数=\(frameCount), RMS=\(String(format: "%.4f", rms))")
-        }
         
         // 发送音频数据到WebSocket客户端
         let event = AudioDataEvent(
@@ -213,7 +205,7 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         let frameCount = Int(buffer.frameLength)
         let channelCount = Int(buffer.format.channelCount)
         
-        print("🔊 处理系统音频: 帧数=\(frameCount), 声道数=\(channelCount)")
+
         
         var audioData: [Double] = []
         
@@ -238,9 +230,8 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
             audioData = Array(UnsafeBufferPointer(start: channelData, count: frameCount)).map(Double.init)
         }
         
-        // 计算音频强度用于调试
+        // 计算音频强度
         let rms = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
-        print("🔊 系统音频: 帧数=\(frameCount), 声道数=\(channelCount), RMS=\(String(format: "%.4f", rms))")
         
         let event = AudioDataEvent(
             id: generateId(),
@@ -295,7 +286,6 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         webSocketsLock.unlock()
         
         // 关闭所有WebSocket连接
-        print("🛑 关闭 \(socketsToClose.count) 个WebSocket连接...")
         for socket in socketsToClose {
             try? await socket.close()
         }
@@ -345,27 +335,14 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
     
     // MARK: - Audio Processing
     private func processSystemAudioSample(sampleBuffer: CMSampleBuffer) {
-        // 添加详细的调试信息
-        let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
-        print("🔊 收到系统音频样本: \(numSamples) 个样本")
-        
-        if let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
-           let audioStreamBasicDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) {
-            print("🔊 系统音频格式: 采样率=\(audioStreamBasicDescription.pointee.mSampleRate)Hz, 声道数=\(audioStreamBasicDescription.pointee.mChannelsPerFrame)")
-        }
-        
         guard let audioBuffer = convertSampleBufferToPCMBuffer(sampleBuffer) else {
-            print("❌ 系统音频格式转换失败")
             return
         }
-        
-        print("🔊 转换后的PCM缓冲区: 帧长度=\(audioBuffer.frameLength)")
         processSystemAudio(buffer: audioBuffer)
     }
     
     private func processMicrophoneAudioSample(sampleBuffer: CMSampleBuffer) {
         guard let audioBuffer = convertSampleBufferToPCMBuffer(sampleBuffer) else {
-            print("❌ 麦克风音频格式转换失败")
             return
         }
         processMicrophoneAudio(buffer: audioBuffer)
@@ -384,7 +361,6 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         }
         
         let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
-        print("🔄 转换音频: 帧数=\(frameCount), 源格式=\(sourceFormat)")
         
         guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(frameCount)) else {
             print("❌ 无法创建源PCM缓冲区")
@@ -398,25 +374,11 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
             var lengthAtOffset: Int = 0
             let status = CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset, totalLengthOut: nil, dataPointerOut: &dataPointer)
             
-            print("🔄 数据块状态: \(status), 数据长度: \(lengthAtOffset)")
-            
             if status == noErr, let data = dataPointer {
                 let audioBufferList = sourceBuffer.mutableAudioBufferList
                 let bytesToCopy = min(lengthAtOffset, Int(audioBufferList.pointee.mBuffers.mDataByteSize))
                 audioBufferList.pointee.mBuffers.mData?.copyMemory(from: data, byteCount: bytesToCopy)
-                print("🔄 复制了 \(bytesToCopy) 字节数据")
-            } else {
-                print("❌ 无法获取音频数据指针")
             }
-        } else {
-            print("❌ 无法获取数据块缓冲区")
-        }
-        
-        // 检查源缓冲区是否有数据
-        if let channelData = sourceBuffer.floatChannelData?[0] {
-            let sampleData = Array(UnsafeBufferPointer(start: channelData, count: Int(sourceBuffer.frameLength)))
-            let rms = sqrt(sampleData.map { $0 * $0 }.reduce(0, +) / Float(sampleData.count))
-            print("🔄 源缓冲区RMS: \(rms)")
         }
         
         guard let targetFormat = AVAudioFormat(
@@ -430,11 +392,8 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         }
         
         if sourceFormat.commonFormat == .pcmFormatFloat32 {
-            print("✅ 源格式已经是Float32，直接返回")
             return sourceBuffer
         }
-        
-        print("🔄 需要格式转换: \(sourceFormat.commonFormat) -> Float32")
         
         guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(frameCount)) else {
             print("❌ 无法创建输出PCM缓冲区")
@@ -453,11 +412,8 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         }
         
         if status == .error {
-            print("❌ 音频转换失败: \(error?.localizedDescription ?? "未知错误")")
             return nil
         }
-        
-        print("✅ 音频转换成功")
         return outputBuffer
     }
 }
