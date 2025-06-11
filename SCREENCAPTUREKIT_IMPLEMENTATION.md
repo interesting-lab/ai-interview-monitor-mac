@@ -35,7 +35,7 @@ class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 let configuration = SCStreamConfiguration()
 configuration.capturesAudio = true
 configuration.excludesCurrentProcessAudio = true
-configuration.sampleRate = 44100
+configuration.sampleRate = 16000
 configuration.channelCount = 2
 
 // 创建内容过滤器，排除当前应用

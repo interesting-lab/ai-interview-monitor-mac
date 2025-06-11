@@ -6,9 +6,79 @@ import Cocoa
 import IOKit
 import CoreAudio
 import AudioToolbox
+import ScreenCaptureKit
+
+// MARK: - 数据结构定义
+struct AudioDataEvent: Content {
+    let id: String
+    let payload: AudioPayload
+    let type: String?
+    let wsEventType: String
+}
+
+struct AudioPayload: Content {
+    let audioType: String  // "system" or "mic"
+    let data: [Double]
+}
+
+struct HealthResponse: Content {
+    let data: HealthData
+    let success: Bool
+}
+
+struct HealthData: Content {
+    let ok: Bool
+}
+
+struct ConfigResponse: Content {
+    let data: ConfigData
+    let success: Bool
+}
+
+struct ConfigData: Content {
+    let audioConfig: AudioConfig
+    let deviceInfo: DeviceInfo
+}
+
+struct AudioConfig: Content {
+    let bufferDurationMs: Double
+    let sampleRate: Double
+}
+
+struct DeviceInfo: Content {
+    let build: String
+    let id: String
+    let name: String
+    let platform: String
+    let version: String
+}
 
 class AudioServerApp: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
+    private var permissionWindow: NSWindow?
+    private var isShowingPermissionScreen = false
+    
+    // 主题相关
+    private var isDarkMode: Bool {
+        if #available(macOS 10.14, *) {
+            // 首先检查系统偏好设置
+            let userDefaults = UserDefaults.standard
+            let appleInterfaceStyle = userDefaults.string(forKey: "AppleInterfaceStyle")
+            if appleInterfaceStyle == "Dark" {
+                return true
+            }
+            
+            // 备用检测方法：使用外观
+            let appearance = window?.effectiveAppearance ?? NSApp.effectiveAppearance
+            if let appearanceName = appearance.bestMatch(from: [.aqua, .darkAqua]) {
+                return appearanceName == .darkAqua
+            }
+            
+            // 更多备用检测方法
+            return appearance.name == .darkAqua || appearance.name == .vibrantDark
+        }
+        return false
+    }
     
     // 版本信息
     private var versionLabel: NSTextField!
@@ -67,11 +137,421 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     private var systemAudioBarViews: [NSView] = []
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupThemeObserver()
         createMainWindow()
+        checkInitialPermissions()
+        logMessage("应用程序已启动")
+    }
+    
+    private func setupThemeObserver() {
+        if #available(macOS 10.14, *) {
+            // 监听系统主题变化
+            DistributedNotificationCenter.default.addObserver(
+                self,
+                selector: #selector(themeChanged),
+                name: Notification.Name("AppleInterfaceThemeChangedNotification"),
+                object: nil
+            )
+            
+            // 另一个主题变化通知
+            DistributedNotificationCenter.default.addObserver(
+                self,
+                selector: #selector(themeChanged),
+                name: Notification.Name("AppleAquaColorVariantChanged"),
+                object: nil
+            )
+        }
+    }
+    
+    @objc private func themeChanged() {
+        DispatchQueue.main.async {
+            print("🎨 主题变化检测到，当前是深色模式: \(self.isDarkMode)")
+            self.updateTheme()
+        }
+    }
+    
+    private func updateTheme() {
+        // 更新主窗口主题
+        updateWindowTheme(window)
+        
+        // 更新权限窗口主题
+        if let permissionWindow = permissionWindow {
+            updateWindowTheme(permissionWindow)
+            setupPermissionUI() // 重新设置权限界面以应用新主题
+        }
+        
+        // 如果主界面已显示，重新设置UI
+        if !isShowingPermissionScreen {
+            setupUI()
+            setupAudioDevices()
+        }
+    }
+    
+    private func updateWindowTheme(_ window: NSWindow) {
+        if #available(macOS 10.14, *) {
+            window.appearance = nil // 使用系统默认外观
+        }
+        
+        // 更新背景色
+        window.contentView?.wantsLayer = true
+        window.contentView?.layer?.backgroundColor = getBackgroundColor()
+    }
+    
+    private func getBackgroundColor() -> CGColor {
+        if isDarkMode {
+            return NSColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0).cgColor
+        } else {
+            return NSColor(red: 0.95, green: 0.95, blue: 0.95, alpha: 1.0).cgColor
+        }
+    }
+    
+    private func getContainerBackgroundColor() -> NSColor {
+        if isDarkMode {
+            return NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1.0)
+        } else {
+            return NSColor(red: 0.98, green: 0.98, blue: 0.98, alpha: 1.0)
+        }
+    }
+    
+    private func getContainerBorderColor() -> NSColor {
+        if isDarkMode {
+            return NSColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 1.0)
+        } else {
+            return NSColor(red: 0.8, green: 0.8, blue: 0.8, alpha: 1.0)
+        }
+    }
+    
+    private func getButtonBackgroundColor() -> NSColor {
+        if isDarkMode {
+            return NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 1.0)
+        } else {
+            return NSColor(red: 0.92, green: 0.92, blue: 0.92, alpha: 1.0)
+        }
+    }
+    
+    private func checkInitialPermissions() {
+        let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        let screenRecordingGranted = checkScreenRecordingPermission()
+        
+        if microphoneStatus == .authorized && screenRecordingGranted {
+            // 所有权限已获得，显示主界面
+            setupMainInterface()
+        } else {
+            // 显示权限请求界面
+            showPermissionScreen()
+        }
+    }
+    
+    private func checkScreenRecordingPermission() -> Bool {
+        if #available(macOS 11.0, *) {
+            // 创建一个测试的 CGDisplayStream 来检查屏幕录制权限
+            let displayID = CGMainDisplayID()
+            let stream = CGDisplayStream(
+                dispatchQueueDisplay: displayID,
+                outputWidth: 1,
+                outputHeight: 1,
+                pixelFormat: Int32(kCVPixelFormatType_32BGRA),
+                properties: nil,
+                queue: DispatchQueue.global(),
+                handler: { _, _, _, _ in }
+            )
+            return stream != nil
+        } else {
+            // 较旧版本假设有权限
+            return true
+        }
+    }
+    
+    private func setupMainInterface() {
         setupUI()
         setupAudioDevices()
-        requestMicrophonePermission()
-        logMessage("应用程序已启动")
+        window.makeKeyAndOrderFront(nil)
+        if let permissionWindow = permissionWindow {
+            permissionWindow.close()
+            self.permissionWindow = nil
+        }
+        isShowingPermissionScreen = false
+        
+        // 确保主题正确设置
+        updateTheme()
+        
+        // 自动启动服务器
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.startServer()
+        }
+    }
+    
+    private func showPermissionScreen() {
+        isShowingPermissionScreen = true
+        createPermissionWindow()
+        window.orderOut(nil) // 隐藏主窗口
+    }
+    
+    private func createPermissionWindow() {
+        permissionWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        
+        guard let permissionWindow = permissionWindow else { return }
+        
+        permissionWindow.title = "Interesting Lab"
+        permissionWindow.center()
+        permissionWindow.isReleasedWhenClosed = false
+        permissionWindow.delegate = self
+        
+        // 禁用窗口大小调整，但允许拖动
+        permissionWindow.minSize = NSSize(width: 480, height: 320)
+        permissionWindow.maxSize = NSSize(width: 480, height: 320)
+        
+        // 设置动态主题
+        updateWindowTheme(permissionWindow)
+        
+        setupPermissionUI()
+        permissionWindow.makeKeyAndOrderFront(nil)
+    }
+    
+    private func setupPermissionUI() {
+        guard let contentView = permissionWindow?.contentView else { return }
+        
+        // 清除现有内容
+        contentView.subviews.removeAll()
+        
+        // 主标题
+        let titleLabel = NSTextField(labelWithString: "授权所需权限")
+        titleLabel.frame = NSRect(x: 0, y: 220, width: 480, height: 30)
+        titleLabel.font = NSFont.systemFont(ofSize: 24, weight: .medium)
+        titleLabel.textColor = .labelColor
+        titleLabel.alignment = .center
+        contentView.addSubview(titleLabel)
+        
+        // 副标题
+        let subtitleLabel = NSTextField(labelWithString: "正在检查所需的系统权限")
+        subtitleLabel.frame = NSRect(x: 0, y: 190, width: 480, height: 20)
+        subtitleLabel.font = NSFont.systemFont(ofSize: 14)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        contentView.addSubview(subtitleLabel)
+        
+        // 权限图标
+        let iconView = NSView(frame: NSRect(x: 220, y: 130, width: 40, height: 40))
+        iconView.wantsLayer = true
+        iconView.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        iconView.layer?.cornerRadius = 20
+        contentView.addSubview(iconView)
+        
+        // 在图标中添加盾牌符号
+        let shieldLabel = NSTextField(labelWithString: "🛡")
+        shieldLabel.frame = NSRect(x: 8, y: 8, width: 24, height: 24)
+        shieldLabel.font = NSFont.systemFont(ofSize: 20)
+        shieldLabel.alignment = .center
+        shieldLabel.isBordered = false
+        shieldLabel.isEditable = false
+        shieldLabel.backgroundColor = .clear
+        iconView.addSubview(shieldLabel)
+        
+        // 麦克风权限项
+        setupPermissionItem(
+            contentView: contentView,
+            yPos: 90,
+            icon: "🎤",
+            title: "麦克风权限",
+            description: "需要此权限以捕获您的声音",
+            status: AVCaptureDevice.authorizationStatus(for: .audio)
+        )
+        
+        // 屏幕录制权限项
+        let screenRecordingStatus: AVAuthorizationStatus = checkScreenRecordingPermission() ? .authorized : .notDetermined
+        setupPermissionItem(
+            contentView: contentView,
+            yPos: 50,
+            icon: "🖥️",
+            title: "屏幕录制权限",
+            description: "需要此权限以捕获系统音频",
+            status: screenRecordingStatus
+        )
+        
+        // 底部帮助按钮
+        let helpButton = NSButton(frame: NSRect(x: 190, y: 15, width: 100, height: 24))
+        helpButton.title = "📖 获取帮助"
+        helpButton.bezelStyle = .rounded
+        helpButton.target = self
+        helpButton.action = #selector(showHelp)
+        helpButton.font = NSFont.systemFont(ofSize: 12)
+        contentView.addSubview(helpButton)
+    }
+    
+    private func setupPermissionItem(contentView: NSView, yPos: CGFloat, icon: String, title: String, description: String, status: AVAuthorizationStatus) {
+        let containerView = NSView(frame: NSRect(x: 40, y: yPos, width: 400, height: 32))
+        contentView.addSubview(containerView)
+        
+        // 图标
+        let iconLabel = NSTextField(labelWithString: icon)
+        iconLabel.frame = NSRect(x: 0, y: 6, width: 20, height: 20)
+        iconLabel.font = NSFont.systemFont(ofSize: 16)
+        iconLabel.alignment = .center
+        iconLabel.isBordered = false
+        iconLabel.isEditable = false
+        iconLabel.backgroundColor = .clear
+        containerView.addSubview(iconLabel)
+        
+        // 标题
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.frame = NSRect(x: 30, y: 12, width: 120, height: 18)
+        titleLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        titleLabel.textColor = .labelColor
+        titleLabel.isBordered = false
+        titleLabel.isEditable = false
+        titleLabel.backgroundColor = .clear
+        containerView.addSubview(titleLabel)
+        
+        // 描述
+        let descLabel = NSTextField(labelWithString: description)
+        descLabel.frame = NSRect(x: 30, y: 2, width: 200, height: 16)
+        descLabel.font = NSFont.systemFont(ofSize: 11)
+        descLabel.textColor = .secondaryLabelColor
+        descLabel.isBordered = false
+        descLabel.isEditable = false
+        descLabel.backgroundColor = .clear
+        containerView.addSubview(descLabel)
+        
+        // 状态按钮
+        let statusButton = NSButton(frame: NSRect(x: 320, y: 4, width: 75, height: 24))
+        statusButton.bezelStyle = .rounded
+        statusButton.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        
+        switch status {
+        case .authorized:
+            statusButton.title = "✅ 已授权"
+            statusButton.isEnabled = false
+        case .denied, .restricted:
+            statusButton.title = "⚠ 重新授权"
+            statusButton.target = self
+            statusButton.action = #selector(requestPermissionAgain)
+        case .notDetermined:
+            statusButton.title = "📤 前往授权"
+            statusButton.target = self
+            statusButton.action = #selector(requestInitialPermission)
+        @unknown default:
+            statusButton.title = "❓ 检查状态"
+            statusButton.target = self
+            statusButton.action = #selector(checkPermissionStatus)
+        }
+        
+        containerView.addSubview(statusButton)
+    }
+    
+    @objc private func requestInitialPermission() {
+        // 检查点击的是哪个权限项，这里简化处理，先请求麦克风权限
+        let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        if microphoneStatus == .notDetermined {
+            requestMicrophonePermission()
+        } else {
+            requestScreenRecordingPermission()
+        }
+    }
+    
+    @objc private func requestPermissionAgain() {
+        openSystemPreferences()
+    }
+    
+    private func requestScreenRecordingPermission() {
+        if #available(macOS 14.0, *) {
+            // 使用 ScreenCaptureKit 请求权限
+            Task {
+                do {
+                    _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                    await MainActor.run {
+                        self.logMessage("✅ 屏幕录制权限检查完成")
+                        self.checkAllPermissionsAndProceed()
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.logMessage("❌ 屏幕录制权限被拒绝: \(error.localizedDescription)")
+                        self.showScreenRecordingPermissionAlert()
+                    }
+                }
+            }
+        } else {
+            // 较旧版本的权限请求
+            showScreenRecordingPermissionAlert()
+        }
+    }
+    
+    private func showScreenRecordingPermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "需要屏幕录制权限"
+        alert.informativeText = "为了捕获系统音频，本应用需要屏幕录制权限。\n\n请在系统设置中手动授予权限：\n1. 打开系统设置\n2. 前往隐私与安全性 > 屏幕录制\n3. 找到并勾选本应用"
+        alert.alertStyle = .warning
+        
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "稍后设置")
+        alert.addButton(withTitle: "重新检查")
+        
+        let response = alert.runModal()
+        
+        switch response {
+        case .alertFirstButtonReturn:
+            openScreenRecordingPreferences()
+        case .alertSecondButtonReturn:
+            logMessage("⚠️ 用户选择稍后设置屏幕录制权限")
+        case .alertThirdButtonReturn:
+            checkAllPermissionsAndProceed()
+        default:
+            break
+        }
+    }
+    
+    private func openScreenRecordingPreferences() {
+        if #available(macOS 13.0, *) {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+        } else {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        logMessage("🔧 已打开屏幕录制设置，请手动授予权限")
+    }
+    
+    @objc private func checkPermissionStatus() {
+        checkInitialPermissions()
+    }
+    
+    @objc private func showHelp() {
+        let alert = NSAlert()
+        alert.messageText = "权限设置帮助"
+        alert.informativeText = "为了正常使用音频捕获功能，本应用需要以下权限：\n\n• 麦克风权限：用于录制您的声音\n• 屏幕录制权限：用于录制系统播放的声音\n\n如果权限被拒绝，请：\n1. 打开系统设置\n2. 前往隐私与安全性 > 麦克风/屏幕录制\n3. 找到并勾选本应用"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "了解")
+        alert.addButton(withTitle: "打开系统设置")
+        
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            openSystemPreferences()
+        }
+    }
+    
+    private func checkAndRequestPermissions() {
+        // 检查麦克风权限状态
+        let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        
+        switch microphoneStatus {
+        case .notDetermined:
+            // 首次使用，请求权限
+            requestMicrophonePermission()
+        case .denied, .restricted:
+            // 权限被拒绝，显示引导界面
+            showPermissionGuideAlert()
+        case .authorized:
+            print("✅ 麦克风权限已获得")
+        @unknown default:
+            print("⚠️ 未知的权限状态")
+            requestMicrophonePermission()
+        }
     }
     
     private func requestMicrophonePermission() {
@@ -79,28 +559,104 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 if granted {
                     print("✅ 麦克风权限已获得")
+                    self.logMessage("✅ 麦克风权限已获得")
+                    
+                    // 如果当前显示权限界面，检查是否可以切换到主界面
+                    if self.isShowingPermissionScreen {
+                        self.checkAllPermissionsAndProceed()
+                    }
                 } else {
                     print("❌ 麦克风权限被拒绝")
+                    self.logMessage("❌ 麦克风权限被拒绝")
+                    
+                    // 如果显示权限界面，更新界面状态
+                    if self.isShowingPermissionScreen {
+                        self.setupPermissionUI()
+                    } else {
+                        self.showPermissionGuideAlert()
+                    }
                 }
             }
         }
     }
     
+    private func checkAllPermissionsAndProceed() {
+        let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        let screenRecordingGranted = checkScreenRecordingPermission()
+        
+        if microphoneStatus == .authorized && screenRecordingGranted {
+            // 所有权限都已获得，切换到主界面
+            setupMainInterface()
+        } else {
+            // 更新权限界面显示
+            setupPermissionUI()
+        }
+    }
+    
+    private func showPermissionGuideAlert() {
+        let alert = NSAlert()
+        alert.messageText = "需要麦克风权限"
+        alert.informativeText = "为了正常使用音频捕获功能，请在系统设置中授予本应用麦克风权限。\n\n步骤：\n1. 点击下方\"打开系统设置\"按钮\n2. 在隐私与安全性 > 麦克风中找到本应用\n3. 勾选旁边的复选框以授予权限\n4. 重启应用以使权限生效"
+        alert.alertStyle = .warning
+        
+        // 添加按钮
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "稍后设置")
+        alert.addButton(withTitle: "重新检查权限")
+        
+        // 设置图标
+        alert.icon = NSImage(named: NSImage.cautionName)
+        
+        let response = alert.runModal()
+        
+        switch response {
+        case .alertFirstButtonReturn:
+            // 打开系统设置
+            openSystemPreferences()
+        case .alertSecondButtonReturn:
+            // 稍后设置，记录日志
+            logMessage("⚠️ 用户选择稍后设置权限")
+        case .alertThirdButtonReturn:
+            // 重新检查权限
+            checkAndRequestPermissions()
+        default:
+            break
+        }
+    }
+    
+    private func openSystemPreferences() {
+        // macOS Ventura (13.0) 及以上使用新的设置路径
+        if #available(macOS 13.0, *) {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
+            }
+        } else {
+            // 较旧版本的macOS
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        
+        logMessage("🔧 已打开系统设置，请手动授予麦克风权限")
+    }
+    
     private func createMainWindow() {
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 450),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         
-        window.title = "Offerin AI"
+        window.title = "Interesting Lab"
         window.center()
-        window.makeKeyAndOrderFront(nil)
         
-        // 设置深色主题背景
-        window.contentView?.wantsLayer = true
-        window.contentView?.layer?.backgroundColor = NSColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0).cgColor
+        // 禁用窗口大小调整，但允许拖动
+        window.minSize = NSSize(width: 500, height: 450)
+        window.maxSize = NSSize(width: 500, height: 450)
+        
+        // 设置动态主题
+        updateWindowTheme(window)
     }
     
     private func setupUI() {
@@ -141,16 +697,16 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 导航栏背景
         let navBar = NSView(frame: NSRect(x: margin, y: yPos - 40, width: contentView.bounds.width - 2 * margin, height: 40))
         navBar.wantsLayer = true
-        navBar.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1.0).cgColor
+        navBar.layer?.backgroundColor = getContainerBackgroundColor().cgColor
         navBar.layer?.cornerRadius = 12
         navBar.layer?.borderWidth = 1
-        navBar.layer?.borderColor = NSColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 1.0).cgColor
+        navBar.layer?.borderColor = getContainerBorderColor().cgColor
         contentView.addSubview(navBar)
         
         // 左侧按钮组
         let leftButtonGroup = NSView(frame: NSRect(x: 15, y: 6, width: 160, height: 28))
         leftButtonGroup.wantsLayer = true
-        leftButtonGroup.layer?.backgroundColor = NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 1.0).cgColor
+        leftButtonGroup.layer?.backgroundColor = getButtonBackgroundColor().cgColor
         leftButtonGroup.layer?.cornerRadius = 10
         navBar.addSubview(leftButtonGroup)
         
@@ -163,19 +719,21 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         let settingsButton = NSButton(frame: NSRect(x: 82, y: 4, width: 70, height: 20))
         settingsButton.title = "⚙️ 设置"
         settingsButton.bezelStyle = .rounded
+        settingsButton.target = self
+        settingsButton.action = #selector(openSettings)
         settingsButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         leftButtonGroup.addSubview(settingsButton)
         
         // 右侧按钮组
         let rightButtonGroup = NSView(frame: NSRect(x: 240, y: 6, width: 230, height: 28))
         rightButtonGroup.wantsLayer = true
-        rightButtonGroup.layer?.backgroundColor = NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 1.0).cgColor
+        rightButtonGroup.layer?.backgroundColor = getButtonBackgroundColor().cgColor
         rightButtonGroup.layer?.cornerRadius = 10
         navBar.addSubview(rightButtonGroup)
         
         
         // 版权信息
-        let copyrightLabel = NSTextField(labelWithString: "© www.offerin.cn, All Rights Reserved")
+        let copyrightLabel = NSTextField(labelWithString: "©")
         copyrightLabel.frame = NSRect(x: contentView.bounds.width - 190, y: 3, width: 170, height: 12)
         copyrightLabel.font = NSFont.systemFont(ofSize: 8)
         copyrightLabel.textColor = NSColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1.0)
@@ -192,17 +750,47 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         versionLabel.font = NSFont.systemFont(ofSize: 11)
         versionLabel.textColor = .tertiaryLabelColor
         contentView.addSubview(versionLabel)
+        
+        // 权限状态标签
+        let permissionStatusLabel = NSTextField(labelWithString: "")
+        permissionStatusLabel.frame = NSRect(x: margin + 180, y: yPos, width: 250, height: 16)
+        permissionStatusLabel.font = NSFont.systemFont(ofSize: 11)
+        permissionStatusLabel.isBordered = false
+        permissionStatusLabel.isEditable = false
+        permissionStatusLabel.backgroundColor = .clear
+        updatePermissionStatusLabel(permissionStatusLabel)
+        contentView.addSubview(permissionStatusLabel)
+        
         yPos -= 25
+    }
+    
+    private func updatePermissionStatusLabel(_ label: NSTextField) {
+        let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        
+        switch microphoneStatus {
+        case .authorized:
+            label.stringValue = ""
+            label.textColor = .systemGreen
+        case .denied, .restricted:
+            label.stringValue = "🚫 麦克风权限：未授权（点击设置进行配置）"
+            label.textColor = .systemRed
+        case .notDetermined:
+            label.stringValue = "❓ 麦克风权限：待确定"
+            label.textColor = .systemOrange
+        @unknown default:
+            label.stringValue = "⚠️ 麦克风权限：状态未知"
+            label.textColor = .systemYellow
+        }
     }
     
     private func setupMicrophoneSection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat, boxHeight: CGFloat) {
         // 容器视图
         let containerView = NSView(frame: NSRect(x: margin, y: yPos - boxHeight, width: contentView.bounds.width - 2 * margin, height: boxHeight))
         containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1.0).cgColor
+        containerView.layer?.backgroundColor = getContainerBackgroundColor().cgColor
         containerView.layer?.cornerRadius = 12
         containerView.layer?.borderWidth = 1
-        containerView.layer?.borderColor = NSColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 1.0).cgColor
+        containerView.layer?.borderColor = getContainerBorderColor().cgColor
         contentView.addSubview(containerView)
         
         // 音频可视化指示器容器
@@ -244,9 +832,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         microphonePopup = NSPopUpButton(frame: NSRect(x: 190, y: boxHeight/2 - 14, width: 230, height: 28))
         microphonePopup.wantsLayer = true
         microphonePopup.layer?.cornerRadius = 6
-        microphonePopup.layer?.backgroundColor = NSColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 1.0).cgColor
+        microphonePopup.layer?.backgroundColor = getButtonBackgroundColor().cgColor
         microphonePopup.layer?.borderWidth = 1
-        microphonePopup.layer?.borderColor = NSColor(red: 0.3, green: 0.3, blue: 0.3, alpha: 1.0).cgColor
+        microphonePopup.layer?.borderColor = getContainerBorderColor().cgColor
         microphonePopup.font = NSFont.systemFont(ofSize: 15)
         containerView.addSubview(microphonePopup)
         
@@ -266,10 +854,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 容器视图
         let containerView = NSView(frame: NSRect(x: margin, y: yPos - boxHeight, width: contentView.bounds.width - 2 * margin, height: boxHeight))
         containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1.0).cgColor
+        containerView.layer?.backgroundColor = getContainerBackgroundColor().cgColor
         containerView.layer?.cornerRadius = 12
         containerView.layer?.borderWidth = 1
-        containerView.layer?.borderColor = NSColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 1.0).cgColor
+        containerView.layer?.borderColor = getContainerBorderColor().cgColor
         contentView.addSubview(containerView)
         
         // 系统音频可视化指示器容器
@@ -311,9 +899,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         systemAudioPopup = NSPopUpButton(frame: NSRect(x: 190, y: boxHeight/2 - 14, width: 230, height: 28))
         systemAudioPopup.wantsLayer = true
         systemAudioPopup.layer?.cornerRadius = 6
-        systemAudioPopup.layer?.backgroundColor = NSColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 1.0).cgColor
+        systemAudioPopup.layer?.backgroundColor = getButtonBackgroundColor().cgColor
         systemAudioPopup.layer?.borderWidth = 1
-        systemAudioPopup.layer?.borderColor = NSColor(red: 0.3, green: 0.3, blue: 0.3, alpha: 1.0).cgColor
+        systemAudioPopup.layer?.borderColor = getContainerBorderColor().cgColor
         systemAudioPopup.font = NSFont.systemFont(ofSize: 15)
         containerView.addSubview(systemAudioPopup)
         
@@ -333,10 +921,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 容器视图
         let containerView = NSView(frame: NSRect(x: margin, y: yPos - boxHeight, width: contentView.bounds.width - 2 * margin, height: boxHeight))
         containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1.0).cgColor
+        containerView.layer?.backgroundColor = getContainerBackgroundColor().cgColor
         containerView.layer?.cornerRadius = 12
         containerView.layer?.borderWidth = 1
-        containerView.layer?.borderColor = NSColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 1.0).cgColor
+        containerView.layer?.borderColor = getContainerBorderColor().cgColor
         contentView.addSubview(containerView)
         
         // 状态标签
@@ -359,32 +947,29 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         containerView.addSubview(serviceDescLabel)
         
         // 按钮容器
-        let buttonContainer = NSView(frame: NSRect(x: 300, y: boxHeight/2 - 20, width: 150, height: 40))
+        let buttonContainer = NSView(frame: NSRect(x: 280, y: boxHeight/2 - 18, width: 180, height: 36))
         buttonContainer.wantsLayer = true
-        buttonContainer.layer?.backgroundColor = NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 1.0).cgColor
-        buttonContainer.layer?.cornerRadius = 10
+        buttonContainer.layer?.backgroundColor = getButtonBackgroundColor().cgColor
+        buttonContainer.layer?.cornerRadius = 12
         containerView.addSubview(buttonContainer)
         
         // 重启按钮
-        restartButton = NSButton(frame: NSRect(x: 10, y: 10, width: 60, height: 20))
+        restartButton = NSButton(frame: NSRect(x: 12, y: 6, width: 75, height: 24))
         restartButton.title = "🔄 重启"
         restartButton.bezelStyle = .rounded
         restartButton.target = self
         restartButton.action = #selector(restartServer)
         restartButton.isEnabled = false
-        restartButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        restartButton.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         buttonContainer.addSubview(restartButton)
         
         // 启动按钮
-        startButton = NSButton(frame: NSRect(x: 80, y: 10, width: 80, height: 20))
+        startButton = NSButton(frame: NSRect(x: 93, y: 6, width: 75, height: 24))
         startButton.title = "▶ 启动"
         startButton.bezelStyle = .rounded
         startButton.target = self
         startButton.action = #selector(startServer)
-        startButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        startButton.wantsLayer = true
-        startButton.layer?.backgroundColor = NSColor.systemBlue.cgColor
-        startButton.layer?.cornerRadius = 8
+        startButton.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         buttonContainer.addSubview(startButton)
         
         yPos -= boxHeight
@@ -394,10 +979,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 容器视图
         let containerView = NSView(frame: NSRect(x: margin, y: yPos - 110, width: contentView.bounds.width - 2 * margin, height: 110))
         containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1.0).cgColor
+        containerView.layer?.backgroundColor = getContainerBackgroundColor().cgColor
         containerView.layer?.cornerRadius = 12
         containerView.layer?.borderWidth = 1
-        containerView.layer?.borderColor = NSColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 1.0).cgColor
+        containerView.layer?.borderColor = getContainerBorderColor().cgColor
         contentView.addSubview(containerView)
         
         // 标题
@@ -413,7 +998,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 功能按钮容器
         let buttonGroup = NSView(frame: NSRect(x: 190, y: 75, width: 250, height: 28))
         buttonGroup.wantsLayer = true
-        buttonGroup.layer?.backgroundColor = NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 1.0).cgColor
+        buttonGroup.layer?.backgroundColor = getButtonBackgroundColor().cgColor
         buttonGroup.layer?.cornerRadius = 10
         containerView.addSubview(buttonGroup)
         
@@ -461,7 +1046,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     @objc private func refreshMicrophoneDevices() {
         microphonePopup.removeAllItems()
         
-        // 获取音频输入设备（使用兼容的API）
+        // 获取音频输入设备（兼容不同macOS版本）
         if #available(macOS 14.0, *) {
             let discoverySession = AVCaptureDevice.DiscoverySession(
                 deviceTypes: [.microphone, .builtInMicrophone],
@@ -473,10 +1058,22 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                 microphonePopup.addItem(withTitle: device.localizedName)
             }
         } else {
-            // 使用较旧的API
-            let devices = AVCaptureDevice.devices(for: .audio)
+            // 对于较旧版本，只使用 builtInMicrophone
+            let discoverySession = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.builtInMicrophone],
+                mediaType: .audio,
+                position: .unspecified
+            )
+            let devices = discoverySession.devices
             for device in devices {
                 microphonePopup.addItem(withTitle: device.localizedName)
+            }
+            
+            // 如果没有找到设备，尝试获取默认音频设备
+            if devices.isEmpty {
+                if let defaultDevice = AVCaptureDevice.default(for: .audio) {
+                    microphonePopup.addItem(withTitle: defaultDevice.localizedName)
+                }
             }
         }
         
@@ -541,7 +1138,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                 // 检查现有应用实例
                 if let existingApp = self.app {
                     print("🛑 停止现有服务...")
-                    try? await existingApp.server.shutdown()
+                    await existingApp.server.shutdown()
                 }
                 
                 // 初始化日志系统（只在第一次调用）
@@ -556,23 +1153,51 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                 
                 try await configure(app)
                 
+                // 启动音频捕获系统
+                if #available(macOS 12.3, *) {
+                    do {
+                        self.logMessage("🎙️ 启动音频捕获系统...")
+                        try await AudioCapture.shared.startGlobalAudioCapture()
+                        self.logMessage("✅ 音频捕获系统已启动")
+                    } catch {
+                        self.logMessage("❌ 音频捕获启动失败: \(error.localizedDescription)")
+                    }
+                }
+                
                 await MainActor.run {
                     self.app = app
                     self.updateServiceStatus(isRunning: true, isStarting: false)
                     self.logMessage("✅ 服务器已在端口 9047 启动")
-                    self.logMessage("🎵 音频监控已开始")
+                    
+                    // 获取所有网络接口
+                    let networkIPs = getNetworkInterfaces()
+                    self.logMessage("🌐 可访问的接口:")
+                    for ip in networkIPs {
+                        self.logMessage("   • HTTP: http://\(ip):9047")
+                        self.logMessage("   • WebSocket: ws://\(ip):9047/ws")
+                        self.logMessage("   • 健康检查: http://\(ip):9047/health")
+                        self.logMessage("   • 配置信息: http://\(ip):9047/config")
+                        if ip != networkIPs.last {
+                            self.logMessage("   ----")
+                        }
+                    }
+                    self.logMessage("🎵 音频监控和转发已全面启动")
                     
                     // 启动音频级别监测和可视化
                     self.startAudioLevelMonitoring()
                 }
                 
                 // 启动服务器但不使用execute()，避免命令行冲突
-                try await app.server.start(address: .hostname("127.0.0.1", port: 9047))
+                try await app.server.start(address: .hostname("0.0.0.0", port: 9047))
                 
                 // 保持服务器运行，直到任务被取消
                 // 不在这里调用 asyncShutdown，让停止逻辑统一处理
                 while !Task.isCancelled {
-                    try await Task.sleep(for: .seconds(1))
+                    if #available(macOS 13.0, *) {
+                        try await Task.sleep(for: .seconds(1))
+                    } else {
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -608,12 +1233,8 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             // 停止Vapor服务器（不完全关闭应用）
             if let app = self.app {
                 print("🛑 停止 Vapor 服务器...")
-                do {
-                    try await app.server.shutdown()
-                    print("✅ Vapor 服务器已停止")
-                } catch {
-                    print("⚠️ 停止 Vapor 服务器时出错: \(error)")
-                }
+                await app.server.shutdown()
+                print("✅ Vapor 服务器已停止")
             }
             
             await MainActor.run {
@@ -627,8 +1248,12 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     
     @objc private func restartServer() {
         Task {
-            await stopServer()
-            try? await Task.sleep(for: .seconds(1))
+            stopServer()
+            if #available(macOS 13.0, *) {
+                try? await Task.sleep(for: .seconds(1))
+            } else {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
             await MainActor.run {
                 self.startServer()
             }
@@ -644,10 +1269,35 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     @objc private func copyAll() {
+        let networkIPs = getNetworkInterfaces()
+        let addresses = networkIPs.map { "http://\($0):9047" }.joined(separator: "\n")
+        
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString("http://127.0.0.1:9047", forType: .string)
-        logMessage("📋 已复制服务器地址到剪贴板")
+        pasteboard.setString(addresses, forType: .string)
+        logMessage("📋 已复制所有服务器地址到剪贴板")
+    }
+    
+    @objc private func openSettings() {
+        let alert = NSAlert()
+        alert.messageText = "权限设置"
+        alert.informativeText = "选择要执行的操作："
+        alert.alertStyle = .informational
+        
+        alert.addButton(withTitle: "检查麦克风权限")
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "取消")
+        
+        let response = alert.runModal()
+        
+        switch response {
+        case .alertFirstButtonReturn:
+            checkAndRequestPermissions()
+        case .alertSecondButtonReturn:
+            openSystemPreferences()
+        default:
+            break
+        }
     }
     
     private func updateServiceStatus(isRunning: Bool, isStarting: Bool) {
@@ -666,7 +1316,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                 self.startButton.action = #selector(self.stopServer)
                 self.startButton.isEnabled = true
                 self.restartButton.isEnabled = true
-                self.statusInfoLabel.stringValue = "✅ 服务已启动！连接地址: http://127.0.0.1:9047"
+                // 获取所有网络接口并显示
+                let networkIPs = getNetworkInterfaces()
+                let addresses = networkIPs.map { "http://\($0):9047" }.joined(separator: ", ")
+                self.statusInfoLabel.stringValue = "✅ 服务已启动！连接地址: \(addresses)"
                 self.statusInfoLabel.textColor = .systemGreen
             } else {
                 self.serviceStatusLabel.stringValue = "转发服务已停止"
@@ -892,4 +1545,172 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
     }
+}
+
+// MARK: - NSWindowDelegate
+extension AudioServerApp: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // 如果是权限窗口且权限未完全获得，不允许关闭
+        if sender == permissionWindow && isShowingPermissionScreen {
+            let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+            let screenRecordingGranted = checkScreenRecordingPermission()
+            
+            if microphoneStatus != .authorized || !screenRecordingGranted {
+                let alert = NSAlert()
+                alert.messageText = "需要权限才能继续"
+                alert.informativeText = "请先授权必要的权限（麦克风权限和屏幕录制权限），否则应用无法正常工作。"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "继续授权")
+                alert.addButton(withTitle: "退出应用")
+                
+                let response = alert.runModal()
+                if response == .alertSecondButtonReturn {
+                    NSApplication.shared.terminate(nil)
+                }
+                return false
+            }
+        }
+        return true
+    }
+}
+
+// MARK: - Vapor配置函数
+func configure(_ app: Application) async throws {
+    // 配置CORS
+    let corsConfiguration = CORSMiddleware.Configuration(
+        allowedOrigin: .all,
+        allowedMethods: [.GET, .POST, .PUT, .OPTIONS, .DELETE, .PATCH],
+        allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith, .userAgent, .accessControlAllowOrigin]
+    )
+    let cors = CORSMiddleware(configuration: corsConfiguration)
+    app.middleware.use(cors, at: .beginning)
+    
+    // 注册路由
+    try routes(app)
+}
+
+func routes(_ app: Application) throws {
+    // 健康检查
+    app.get("health") { req -> HealthResponse in
+        return HealthResponse(
+            data: HealthData(ok: true),
+            success: true
+        )
+    }
+    
+    // 配置信息
+    app.get("config") { req -> ConfigResponse in
+        return ConfigResponse(
+            data: ConfigData(
+                audioConfig: AudioConfig(
+                    bufferDurationMs: 50.0,
+                    sampleRate: 16000.0
+                ),
+                deviceInfo: DeviceInfo(
+                    build: "15",
+                    id: getDeviceId(),
+                    name: getDeviceName(),
+                    platform: "macos",
+                    version: "2.1.0"
+                )
+            ),
+            success: true
+        )
+    }
+    
+    // WebSocket连接 - 兼容多个路径
+    let websocketHandler: @Sendable (Request, WebSocket) async -> Void = { req, ws in
+        print("🔗 新的WebSocket连接")
+        
+        if #available(macOS 12.3, *) {
+            await AudioCapture.shared.addWebSocket(ws)
+        }
+        
+        // 发送欢迎消息
+        try? await ws.send("Connected to Audio Capture Service")
+        
+        ws.onClose.whenComplete { result in
+            print("🔌 WebSocket连接已关闭")
+            if #available(macOS 12.3, *) {
+                Task {
+                    await AudioCapture.shared.removeWebSocket(ws)
+                }
+            }
+        }
+    }
+    
+    // 支持多个WebSocket路径
+    app.webSocket("audio", onUpgrade: websocketHandler)
+    app.webSocket("ws", onUpgrade: websocketHandler)
+    
+    // 基本状态检查路由
+    app.get { req -> String in
+        return "Interesting Lab Audio Service is running!"
+    }
+}
+
+func getDeviceId() -> String {
+    if #available(macOS 12.0, *) {
+        // 使用较新的API
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        defer { IOObjectRelease(service) }
+        
+        if let serialNumber = IORegistryEntryCreateCFProperty(service, kIOPlatformSerialNumberKey as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? String {
+            return serialNumber
+        }
+    } else {
+        // 较旧版本的兼容性代码
+        let service = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        defer { IOObjectRelease(service) }
+        
+        if let serialNumber = IORegistryEntryCreateCFProperty(service, kIOPlatformSerialNumberKey as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? String {
+            return serialNumber
+        }
+    }
+    
+    return "unknown-device"
+}
+
+func getDeviceName() -> String {
+    let host = ProcessInfo.processInfo.hostName
+    return host.isEmpty ? "Unknown Mac" : host
+}
+
+func getNetworkInterfaces() -> [String] {
+    var addresses: [String] = []
+    
+    // 获取所有网络接口
+    var ifaddr: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&ifaddr) == 0 else { return ["127.0.0.1"] }
+    guard let firstAddr = ifaddr else { return ["127.0.0.1"] }
+    
+    defer { freeifaddrs(ifaddr) }
+    
+    for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
+        let interface = ptr.pointee
+        
+        // 检查地址族，只处理IPv4地址
+        let addrFamily = interface.ifa_addr.pointee.sa_family
+        if addrFamily == UInt8(AF_INET) {
+            
+            // 检查接口是否激活且不是回环接口
+            let flags = interface.ifa_flags
+            if (flags & UInt32(IFF_UP)) != 0 && (flags & UInt32(IFF_RUNNING)) != 0 {
+                
+                // 转换地址
+                let addr = interface.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+                let ip = String(cString: inet_ntoa(addr))
+                
+                // 只添加非回环地址
+                if ip != "127.0.0.1" {
+                    addresses.append(ip)
+                }
+            }
+        }
+    }
+    
+    // 总是包含localhost作为备用
+    addresses.append("127.0.0.1")
+    
+    return addresses.isEmpty ? ["127.0.0.1"] : addresses
 } 

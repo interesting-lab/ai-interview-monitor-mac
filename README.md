@@ -1,189 +1,122 @@
-# Audio Capture macOS App
+# Interesting Lab - 音频捕获应用
 
-一个原生的macOS应用程序，提供音频捕获服务，支持麦克风和系统音频数据的实时传输。
+一个支持麦克风和系统音频捕获的macOS应用程序，具有现代化的用户界面和完整的权限管理。
 
-## 功能特性
+## ✨ 主要功能
 
-- **原生macOS应用**：使用Swift和AppKit开发
-- **HTTP API服务**：监听端口9047，提供RESTful API
-- **WebSocket支持**：实时音频数据流传输
-- **音频捕获**：同时捕获麦克风和系统音频
-- **图形界面**：简洁的GUI控制界面
+- 🎤 麦克风音频捕获
+- 🖥️ 系统音频捕获 
+- 🎨 动态主题切换（跟随系统深色/浅色模式）
+- 🔐 完整的权限管理系统
+- 🌐 WebSocket音频转发服务
+- 📊 实时音频可视化
 
-## API 端点
+## 🛠️ 构建应用
 
-### HTTP API
-
-#### 1. 健康检查
-```
-GET /health
-```
-响应：
-```json
-{
-    "data": {
-        "ok": true
-    },
-    "success": true
-}
-```
-
-#### 2. 配置信息
-```
-GET /config
-```
-响应：
-```json
-{
-    "data": {
-        "audioConfig": {
-            "bufferDurationMs": 50.0,
-            "sampleRate": 16000.0
-        },
-        "deviceInfo": {
-            "build": "15",
-            "id": "10F7F6DD-2D66-55C3-9128-E80E85EFBF1D",
-            "name": "zihjiang's MBPM4",
-            "platform": "macos",
-            "version": "2.1.0"
-        }
-    },
-    "success": true
-}
-```
-
-### WebSocket API
-
-#### 音频数据流
-```
-WebSocket /ws
-```
-
-**麦克风数据**：
-```json
-{
-    "id": "GAocFtaxX6X2Lc_xAi8Ev",
-    "payload": {
-        "audioType": "mic",
-        "data": [-0.0028614969924092293, -0.0029907075222581625, ...]
-    },
-    "type": null,
-    "wsEventType": "audio-data-event"
-}
-```
-
-**系统音频数据**：
-```json
-{
-    "id": "-kjugMPCCSoqmOer3lapx",
-    "payload": {
-        "audioType": "system",
-        "data": [0.0, 0.0, 0.0, ...]
-    },
-    "type": null,
-    "wsEventType": "audio-data-event"
-}
-```
-
-## 系统要求
-
-- macOS 13.0 或更高版本
-- Xcode 14.0 或更高版本
-- Swift 5.9 或更高版本
-
-## 安装和使用
-
-### 1. 编译和运行
+### 方法1：使用构建脚本（推荐）
 
 ```bash
-# 编译项目
-make build
-
-# 运行命令行版本
-make run
-
-# 运行GUI版本
-.build/release/AudioCaptureMacApp --gui
-
-# 或者运行调试版本
-make debug
+# 运行自动构建脚本
+./build_app.sh
 ```
 
-### 2. 创建应用包
+### 方法2：手动构建
 
 ```bash
-# 创建 .app 包
-make package
+# 1. 构建可执行文件
+swift build -c release --arch arm64 --arch x86_64
 
-# 安装到应用程序文件夹
-make install
+# 2. 创建应用包
+mkdir -p ".build/Interesting Lab.app/Contents/MacOS"
+mkdir -p ".build/Interesting Lab.app/Contents/Resources"
+
+# 3. 复制可执行文件
+cp .build/release/InterestingLab ".build/Interesting Lab.app/Contents/MacOS/"
+
+# 4. 复制Info.plist
+cp Sources/AudioCaptureMacApp/Info.plist ".build/Interesting Lab.app/Contents/"
+
+# 5. 设置权限
+chmod +x ".build/Interesting Lab.app/Contents/MacOS/InterestingLab"
 ```
 
-### 3. 测试API
+## 🚀 运行应用
 
-启动应用后，可以使用以下命令测试API：
+构建完成后，你可以通过以下方式运行：
 
 ```bash
-# 运行完整的API测试套件
-./test_api.sh
+# 直接打开应用
+open ".build/Interesting Lab.app"
 
-# 或者单独测试各个端点
-make test          # 测试健康检查
-make test-config   # 测试配置端点
-
-# 手动测试WebSocket（使用wscat）
-npm install -g wscat
-wscat -c ws://localhost:9047/ws
+# 或者双击应用图标
 ```
 
-## 权限要求
+## 🔐 权限要求
 
-应用需要以下权限：
+应用需要以下系统权限：
 
-- **麦克风访问权限**：用于捕获麦克风音频
-- **网络权限**：用于提供HTTP和WebSocket服务
+- **麦克风权限**：用于捕获用户声音输入
+- **屏幕录制权限**：用于捕获系统音频输出
 
-首次运行时，系统会提示授权麦克风访问权限。
+首次运行时，应用会自动引导用户完成权限设置。
 
-## 开发和调试
+## 🎨 主题支持
 
-### 查看日志
+应用支持动态主题切换：
 
-应用会在控制台输出详细的日志信息，包括：
-- 服务器启动状态
-- 音频捕获状态
-- WebSocket连接状态
-- 错误信息
+- **自动跟随系统**：支持 macOS 深色/浅色模式自动切换
+- **实时响应**：系统主题变化时界面立即更新
+- **完整适配**：所有UI元素都支持主题切换
 
-### 清理编译文件
+## 📦 分发应用
+
+如果需要分发给其他用户，建议进行代码签名：
 
 ```bash
-make clean
+# 使用开发者证书签名
+codesign --force --deep --sign "Developer ID Application: Your Name" ".build/Interesting Lab.app"
+
+# 或使用临时签名（仅本机使用）
+codesign --force --deep --sign - ".build/Interesting Lab.app"
 ```
 
-## 技术栈
+## 🔧 开发环境
 
-- **Swift 5.9**：主要编程语言
-- **AppKit**：macOS原生GUI框架
-- **AVFoundation**：音频捕获和处理
-- **Vapor**：HTTP和WebSocket服务器
-- **Swift Package Manager**：依赖管理
+- **macOS**: 11.0+
+- **Swift**: 5.9+
+- **Xcode**: 15.0+
 
-## 故障排除
+## 📋 依赖项
 
-### 1. 麦克风权限被拒绝
-- 前往 系统偏好设置 > 安全性与隐私 > 隐私 > 麦克风
-- 确保应用已被授权
+- [Vapor](https://github.com/vapor/vapor) - Web框架
+- [WebSocketKit](https://github.com/vapor/websocket-kit) - WebSocket支持
+- ScreenCaptureKit - 系统音频捕获（macOS内置）
+- AVFoundation - 音频处理（macOS内置）
 
-### 2. 端口被占用
-- 检查端口9047是否被其他应用占用
-- 使用 `lsof -i :9047` 查看端口使用情况
+## 🐛 故障排除
 
-### 3. 编译错误
-- 确保已安装Xcode和Swift
-- 运行 `swift --version` 检查Swift版本
-- 运行 `make clean` 清理后重新编译
+### 权限问题
+如果遇到权限相关问题：
+1. 打开 系统设置 > 隐私与安全性
+2. 检查 麦克风 和 屏幕录制 权限
+3. 确保应用已被授权
 
-## 许可证
+### 构建问题
+如果构建失败：
+1. 确保已安装 Xcode Command Line Tools
+2. 检查 Swift 版本：`swift --version`
+3. 清理构建缓存：`swift package clean`
 
-MIT License 
+### 运行问题
+如果应用无法启动：
+1. 检查系统版本是否为 macOS 11.0+
+2. 尝试从终端运行查看错误信息
+3. 检查应用签名状态
+
+## 📄 许可证
+
+本项目仅供学习和研究使用。
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！ 

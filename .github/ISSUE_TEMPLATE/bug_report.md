@@ -39,7 +39,7 @@ Paste logs here
 **Audio Configuration**
 - Audio input device: [e.g. Built-in Microphone]
 - Audio output device: [e.g. Built-in Speakers]
-- Sample rate: [e.g. 44100 Hz]
+- Sample rate: [e.g. 16000 Hz]
 
 **Additional context**
 Add any other context about the problem here. 

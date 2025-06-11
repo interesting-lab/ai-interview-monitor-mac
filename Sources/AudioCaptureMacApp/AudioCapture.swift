@@ -21,31 +21,30 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
     
     private var captureStream: SCStream?
     private var micAudioEngine: AVAudioEngine?
-    private var webSockets: Set<WebSocket> = []
+    @MainActor private var webSockets: Set<WebSocket> = []
     private var isCapturing = false
-    private let webSocketsLock = NSLock()
     
     private override init() {
         super.init()
     }
     
-    func addWebSocket(_ webSocket: WebSocket) {
-        webSocketsLock.lock()
-        defer { webSocketsLock.unlock() }
-        
-        webSockets.insert(webSocket)
+    func addWebSocket(_ webSocket: WebSocket) async {
+        _ = await MainActor.run {
+            webSockets.insert(webSocket)
+        }
         
         // 监听WebSocket关闭事件
         webSocket.onClose.whenComplete { [weak self] _ in
-            self?.removeWebSocket(webSocket)
+            Task {
+                await self?.removeWebSocket(webSocket)
+            }
         }
     }
     
-    func removeWebSocket(_ webSocket: WebSocket) {
-        webSocketsLock.lock()
-        defer { webSocketsLock.unlock() }
-        
-        webSockets.remove(webSocket)
+    func removeWebSocket(_ webSocket: WebSocket) async {
+        _ = await MainActor.run {
+            webSockets.remove(webSocket)
+        }
     }
     
     func startGlobalAudioCapture() async throws {
@@ -125,10 +124,12 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         let filter = SCContentFilter(display: display, excludingApplications: excludedApps, exceptingWindows: [])
         
         let configuration = SCStreamConfiguration()
-        configuration.capturesAudio = true
-        configuration.excludesCurrentProcessAudio = true
-        configuration.sampleRate = 44100
-        configuration.channelCount = 2
+        if #available(macOS 13.0, *) {
+            configuration.capturesAudio = true
+            configuration.excludesCurrentProcessAudio = true
+            configuration.sampleRate = 16000
+            configuration.channelCount = 2
+        }
         
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         configuration.queueDepth = 8
@@ -143,7 +144,9 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         
         captureStream = SCStream(filter: filter, configuration: configuration, delegate: self)
         
-        try captureStream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue.global(qos: .userInteractive))
+        if #available(macOS 13.0, *) {
+            try captureStream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue.global(qos: .userInteractive))
+        }
         
         if #available(macOS 15.0, *) {
             try captureStream?.addStreamOutput(self, type: .microphone, sampleHandlerQueue: DispatchQueue.global(qos: .userInteractive))
@@ -185,8 +188,8 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         let frameCount = Int(buffer.frameLength)
         let audioData = Array(UnsafeBufferPointer(start: channelData, count: frameCount)).map(Double.init)
         
-        // 计算音频强度
-        let rms = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
+        // 计算音频强度（暂时不使用）
+        let _ = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
         
         // 发送音频数据到WebSocket客户端
         let event = AudioDataEvent(
@@ -230,8 +233,8 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
             audioData = Array(UnsafeBufferPointer(start: channelData, count: frameCount)).map(Double.init)
         }
         
-        // 计算音频强度
-        let rms = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
+        // 计算音频强度（暂时不使用）
+        let _ = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
         
         let event = AudioDataEvent(
             id: generateId(),
@@ -250,13 +253,11 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
     }
     
     private func sendToAllWebSockets<T: Codable>(event: T) {
-        webSocketsLock.lock()
-        let currentWebSockets = webSockets
-        webSocketsLock.unlock()
-        
-        guard !currentWebSockets.isEmpty else { return }
-        
-        Task {
+        Task { @MainActor in
+            let currentWebSockets = webSockets
+            
+            guard !currentWebSockets.isEmpty else { return }
+            
             do {
                 let encoder = JSONEncoder()
                 // 设置最高的浮点数精度
@@ -279,11 +280,11 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         isCapturing = false
         
         // 首先关闭所有 WebSocket 连接
-        let socketsToClose: Set<WebSocket>
-        webSocketsLock.lock()
-        socketsToClose = webSockets
-        webSockets.removeAll()
-        webSocketsLock.unlock()
+        let socketsToClose = await MainActor.run {
+            let sockets = webSockets
+            webSockets.removeAll()
+            return sockets
+        }
         
         // 关闭所有WebSocket连接
         for socket in socketsToClose {
