@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>截图功能测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        
+        .status.disconnected {
+            background: #fee;
+            color: #c53030;
+            border: 1px solid #fed7d7;
+        }
+        
+        .status.connected {
+            background: #f0fff4;
+            color: #38a169;
+            border: 1px solid #c6f6d5;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            justify-content: center;
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .connect-btn {
+            background: #4299e1;
+            color: white;
+        }
+        
+        .connect-btn:hover {
+            background: #3182ce;
+        }
+        
+        .disconnect-btn {
+            background: #e53e3e;
+            color: white;
+        }
+        
+        .disconnect-btn:hover {
+            background: #c53030;
+        }
+        
+        .screenshot-btn {
+            background: #38a169;
+            color: white;
+        }
+        
+        .screenshot-btn:hover {
+            background: #2f855a;
+        }
+        
+        .screenshot-btn:disabled {
+            background: #a0aec0;
+            cursor: not-allowed;
+        }
+        
+        .screenshot-container {
+            margin-top: 30px;
+            text-align: center;
+        }
+        
+        .screenshot-container img {
+            max-width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .log {
+            background: #2d3748;
+            color: #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            margin-top: 20px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+        
+        .log-entry.info { color: #63b3ed; }
+        .log-entry.success { color: #68d391; }
+        .log-entry.error { color: #fc8181; }
+        .log-entry.screenshot { color: #d6bcfa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📸 截图功能测试</h1>
+        
+        <div id="status" class="status disconnected">
+            ❌ 未连接到服务器
+        </div>
+        
+        <div class="controls">
+            <button id="connectBtn" class="connect-btn">连接服务器</button>
+            <button id="disconnectBtn" class="disconnect-btn" style="display: none;">断开连接</button>
+            <button id="screenshotBtn" class="screenshot-btn" disabled>📸 截图</button>
+        </div>
+        
+        <div class="screenshot-container" id="screenshotContainer" style="display: none;">
+            <h3>最新截图:</h3>
+            <img id="screenshotImg" src="" alt="截图">
+        </div>
+        
+        <div class="log" id="log">
+            <div class="log-entry info">系统初始化完成，准备连接...</div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isConnected = false;
+        
+        const statusEl = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const screenshotBtn = document.getElementById('screenshotBtn');
+        const screenshotContainer = document.getElementById('screenshotContainer');
+        const screenshotImg = document.getElementById('screenshotImg');
+        const logEl = document.getElementById('log');
+        
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        screenshotBtn.addEventListener('click', takeScreenshot);
+        
+        function connect() {
+            if (isConnected) return;
+            
+            log('正在连接到服务器...', 'info');
+            
+            try {
+                ws = new WebSocket('ws://localhost:9047/ws');
+                
+                ws.onopen = function(event) {
+                    isConnected = true;
+                    updateUI();
+                    log('✅ 已连接到服务器', 'success');
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleMessage(data);
+                    } catch (e) {
+                        log('收到文本消息: ' + event.data, 'info');
+                    }
+                };
+                
+                ws.onclose = function(event) {
+                    isConnected = false;
+                    updateUI();
+                    log('❌ 连接已断开', 'error');
+                };
+                
+                ws.onerror = function(error) {
+                    log('❌ 连接错误', 'error');
+                };
+                
+            } catch (error) {
+                log('❌ 连接失败: ' + error.message, 'error');
+            }
+        }
+        
+        function disconnect() {
+            if (!isConnected || !ws) return;
+            
+            ws.close();
+            isConnected = false;
+            updateUI();
+            log('🔌 已主动断开连接', 'info');
+        }
+        
+        function takeScreenshot() {
+            if (!isConnected || !ws) return;
+            
+            const command = {
+                type: "client-screenshot-command",
+                wsEventType: "client-screenshot-command",
+                payload: "",
+                id: generateId()
+            };
+            
+            log('📸 发送截图命令，ID: ' + command.id, 'screenshot');
+            ws.send(JSON.stringify(command));
+        }
+        
+        function handleMessage(data) {
+            if (data.wsEventType === 'clipboard-image-event') {
+                log('📸 收到截图数据，ID: ' + data.id, 'screenshot');
+                
+                if (data.payload && data.payload.base64) {
+                    screenshotImg.src = data.payload.base64;
+                    screenshotContainer.style.display = 'block';
+                    log('✅ 截图显示成功', 'success');
+                } else {
+                    log('❌ 截图数据格式错误', 'error');
+                }
+            } else if (data.wsEventType === 'audio-data-event') {
+                // 忽略音频数据，避免日志过多
+            } else {
+                log('📨 收到消息: ' + JSON.stringify(data), 'info');
+            }
+        }
+        
+        function updateUI() {
+            if (isConnected) {
+                statusEl.textContent = '✅ 已连接到服务器';
+                statusEl.className = 'status connected';
+                connectBtn.style.display = 'none';
+                disconnectBtn.style.display = 'inline-block';
+                screenshotBtn.disabled = false;
+            } else {
+                statusEl.textContent = '❌ 未连接到服务器';
+                statusEl.className = 'status disconnected';
+                connectBtn.style.display = 'inline-block';
+                disconnectBtn.style.display = 'none';
+                screenshotBtn.disabled = true;
+            }
+        }
+        
+        function generateId() {
+            const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let result = '';
+            for (let i = 0; i < 21; i++) {
+                result += characters.charAt(Math.floor(Math.random() * characters.length));
+            }
+            return result;
+        }
+        
+        function log(message, type = 'info') {
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry ${type}`;
+            
+            const timestamp = new Date().toLocaleTimeString();
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            
+            logEl.appendChild(logEntry);
+            logEl.scrollTop = logEl.scrollHeight;
+            
+            // 限制日志条目数量
+            while (logEl.children.length > 50) {
+                logEl.removeChild(logEl.firstChild);
+            }
+        }
+    </script>
+</body>
+</html> 

@@ -24,6 +24,10 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
     @MainActor private var webSockets: Set<WebSocket> = []
     private var isCapturing = false
     
+    // 音频级别监测
+    private var currentSystemAudioLevel: Float = 0.0
+    private var currentMicrophoneLevel: Float = 0.0
+    
     private override init() {
         super.init()
     }
@@ -45,6 +49,15 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         _ = await MainActor.run {
             webSockets.remove(webSocket)
         }
+    }
+    
+    // 获取当前音频级别
+    func getCurrentSystemAudioLevel() -> Float {
+        return currentSystemAudioLevel
+    }
+    
+    func getCurrentMicrophoneLevel() -> Float {
+        return currentMicrophoneLevel
     }
     
     func startGlobalAudioCapture() async throws {
@@ -188,8 +201,9 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         let frameCount = Int(buffer.frameLength)
         let audioData = Array(UnsafeBufferPointer(start: channelData, count: frameCount)).map(Double.init)
         
-        // 计算音频强度（暂时不使用）
-        let _ = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
+        // 计算音频强度
+        let intensity = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
+        currentMicrophoneLevel = Float(intensity)
         
         // 发送音频数据到WebSocket客户端
         let event = AudioDataEvent(
@@ -233,8 +247,9 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
             audioData = Array(UnsafeBufferPointer(start: channelData, count: frameCount)).map(Double.init)
         }
         
-        // 计算音频强度（暂时不使用）
-        let _ = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
+        // 计算音频强度
+        let intensity = sqrt(audioData.map { $0 * $0 }.reduce(0, +) / Double(audioData.count))
+        currentSystemAudioLevel = Float(intensity)
         
         let event = AudioDataEvent(
             id: generateId(),
@@ -265,12 +280,89 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
                 
                 let jsonData = try encoder.encode(event)
                 if let jsonString = String(data: jsonData, encoding: .utf8) {
+                    // 为每个WebSocket创建独立的任务，避免线程安全问题
                     for webSocket in currentWebSockets {
-                        try await webSocket.send(jsonString)
+                        Task {
+                            do {
+                                // 确保在WebSocket的事件循环中发送数据
+                                try await webSocket.send(jsonString)
+                            } catch {
+                                print("❌ WebSocket发送失败: \(error)")
+                                // 如果发送失败，从集合中移除这个WebSocket
+                                await self.removeWebSocket(webSocket)
+                            }
+                        }
                     }
                 }
             } catch {
-                print("❌ WebSocket发送失败: \(error)")
+                print("❌ JSON编码失败: \(error)")
+            }
+        }
+    }
+    
+    // 发送剪贴板事件到所有WebSocket连接
+    func sendClipboardEvent<T: Codable>(_ event: T) async {
+        await MainActor.run {
+            let currentWebSockets = webSockets
+            
+            guard !currentWebSockets.isEmpty else { return }
+            
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.withoutEscapingSlashes]
+                
+                let jsonData = try encoder.encode(event)
+                if let jsonString = String(data: jsonData, encoding: .utf8) {
+                    // 为每个WebSocket创建独立的任务
+                    for webSocket in currentWebSockets {
+                        Task {
+                            do {
+                                try await webSocket.send(jsonString)
+                            } catch {
+                                print("❌ 剪贴板事件发送失败: \(error)")
+                                await self.removeWebSocket(webSocket)
+                            }
+                        }
+                    }
+                }
+            } catch {
+                print("❌ 剪贴板事件JSON编码失败: \(error)")
+            }
+        }
+    }
+    
+    // 发送截图事件到所有WebSocket连接
+    func sendScreenshotEvent<T: Codable>(_ event: T) async {
+        await MainActor.run {
+            let currentWebSockets = webSockets
+            
+            guard !currentWebSockets.isEmpty else { 
+                print("⚠️ 没有活跃的WebSocket连接，无法发送截图")
+                return 
+            }
+            
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.withoutEscapingSlashes]
+                
+                let jsonData = try encoder.encode(event)
+                if let jsonString = String(data: jsonData, encoding: .utf8) {
+                    print("📤 向 \(currentWebSockets.count) 个WebSocket连接发送截图事件")
+                    // 为每个WebSocket创建独立的任务
+                    for webSocket in currentWebSockets {
+                        Task {
+                            do {
+                                try await webSocket.send(jsonString)
+                                print("✅ 截图事件发送成功")
+                            } catch {
+                                print("❌ 截图事件发送失败: \(error)")
+                                await self.removeWebSocket(webSocket)
+                            }
+                        }
+                    }
+                }
+            } catch {
+                print("❌ 截图事件JSON编码失败: \(error)")
             }
         }
     }
