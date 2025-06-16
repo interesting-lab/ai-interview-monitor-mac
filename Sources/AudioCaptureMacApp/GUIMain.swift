@@ -1466,7 +1466,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     
     private func createSettingsWindow() {
         settingsWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -1490,7 +1490,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         contentView.autoresizingMask = [.width, .height]
         settingsWindow.contentView = contentView
         
-        var yPos: CGFloat = 360
+        var yPos: CGFloat = 460
         let margin: CGFloat = 20
         
         // 标题
@@ -1518,7 +1518,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func setupVersionSection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
-        let versionBox = NSBox(frame: NSRect(x: margin, y: yPos - 50, width: contentView.bounds.width - 2 * margin, height: 50))
+        let versionBox = NSBox(frame: NSRect(x: margin, y: yPos - 60, width: contentView.bounds.width - 2 * margin, height: 60))
         versionBox.title = "版本信息"
         versionBox.boxType = .primary
         versionBox.cornerRadius = 8
@@ -1528,7 +1528,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         let versionString = getAppVersion()
         let versionLabel = NSTextField(labelWithString: "当前版本：\(versionString)")
-        versionLabel.frame = NSRect(x: 15, y: 8, width: 300, height: 20)
+        versionLabel.frame = NSRect(x: 15, y: 10, width: 300, height: 20)
         versionLabel.font = NSFont.systemFont(ofSize: 14)
         versionLabel.textColor = .labelColor
         versionLabel.isBordered = false
@@ -1536,11 +1536,11 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         versionLabel.backgroundColor = .clear
         versionBox.addSubview(versionLabel)
         
-        yPos -= 70
+        yPos -= 80
     }
     
     private func setupThemeSection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
-        let themeBox = NSBox(frame: NSRect(x: margin, y: yPos - 80, width: contentView.bounds.width - 2 * margin, height: 80))
+        let themeBox = NSBox(frame: NSRect(x: margin, y: yPos - 90, width: contentView.bounds.width - 2 * margin, height: 90))
         themeBox.title = "主题设置"
         themeBox.boxType = .primary
         themeBox.cornerRadius = 8
@@ -1568,7 +1568,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         themeBox.addSubview(themePopup)
         
         let themeDescLabel = NSTextField(labelWithString: "选择应用的主题模式，跟随系统会根据系统设置自动切换")
-        themeDescLabel.frame = NSRect(x: 15, y: 8, width: 400, height: 20)
+        themeDescLabel.frame = NSRect(x: 15, y: 20, width: 400, height: 20)
         themeDescLabel.font = NSFont.systemFont(ofSize: 12)
         themeDescLabel.textColor = .secondaryLabelColor
         themeDescLabel.isBordered = false
@@ -1576,11 +1576,11 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         themeDescLabel.backgroundColor = .clear
         themeBox.addSubview(themeDescLabel)
         
-        yPos -= 100
+        yPos -= 110
     }
     
     private func setupHotKeySection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
-        let hotKeyBox = NSBox(frame: NSRect(x: margin, y: yPos - 100, width: contentView.bounds.width - 2 * margin, height: 100))
+        let hotKeyBox = NSBox(frame: NSRect(x: margin, y: yPos - 110, width: contentView.bounds.width - 2 * margin, height: 110))
         hotKeyBox.title = "全局快捷键"
         hotKeyBox.boxType = .primary
         hotKeyBox.cornerRadius = 8
@@ -1588,18 +1588,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         hotKeyBox.borderColor = getContainerBorderColor()
         contentView.addSubview(hotKeyBox)
         
-        let hotKeyLabel = NSTextField(labelWithString: "截图快捷键：")
-        hotKeyLabel.frame = NSRect(x: 15, y: 60, width: 100, height: 20)
-        hotKeyLabel.font = NSFont.systemFont(ofSize: 14)
-        hotKeyLabel.textColor = .labelColor
-        hotKeyLabel.isBordered = false
-        hotKeyLabel.isEditable = false
-        hotKeyLabel.backgroundColor = .clear
-        hotKeyBox.addSubview(hotKeyLabel)
-        
-        let hotKeyDisplay = NSTextField(labelWithString: "Ctrl + Shift + 空格")
-        hotKeyDisplay.frame = NSRect(x: 120, y: 60, width: 200, height: 20)
-        hotKeyDisplay.font = NSFont.systemFont(ofSize: 14)
+        let hotKeyDisplay = NSTextField(labelWithString: "Command + Shift + 空格")
+        hotKeyDisplay.frame = NSRect(x: 15, y: 65, width: 200, height: 20)
+        hotKeyDisplay.font = NSFont.systemFont(ofSize: 14, weight: .medium)
         hotKeyDisplay.textColor = .systemBlue
         hotKeyDisplay.isBordered = false
         hotKeyDisplay.isEditable = false
@@ -1607,24 +1598,24 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         hotKeyBox.addSubview(hotKeyDisplay)
         
         let enableHotKeyCheckbox = NSButton(checkboxWithTitle: "启用全局截图快捷键", target: self, action: #selector(toggleHotKey(_:)))
-        enableHotKeyCheckbox.frame = NSRect(x: 15, y: 35, width: 200, height: 20)
+        enableHotKeyCheckbox.frame = NSRect(x: 15, y: 40, width: 200, height: 20)
         enableHotKeyCheckbox.state = (globalHotKey != nil || localHotKey != nil) ? .on : .off
         hotKeyBox.addSubview(enableHotKeyCheckbox)
         
         // 添加测试按钮
         let testButton = NSButton(title: "测试截图", target: self, action: #selector(testScreenshot))
-        testButton.frame = NSRect(x: 220, y: 33, width: 80, height: 24)
+        testButton.frame = NSRect(x: 230, y: 55, width: 70, height: 30)
         testButton.bezelStyle = .rounded
         hotKeyBox.addSubview(testButton)
         
         // 添加权限检查按钮
         let checkPermButton = NSButton(title: "检查权限", target: self, action: #selector(checkHotKeyPermissions))
-        checkPermButton.frame = NSRect(x: 310, y: 33, width: 80, height: 24)
+        checkPermButton.frame = NSRect(x: 310, y: 55, width: 80, height: 30)
         checkPermButton.bezelStyle = .rounded
         hotKeyBox.addSubview(checkPermButton)
         
         let hotKeyDescLabel = NSTextField(labelWithString: "按下快捷键后会截取屏幕并通过WebSocket发送到客户端")
-        hotKeyDescLabel.frame = NSRect(x: 15, y: 8, width: 400, height: 20)
+        hotKeyDescLabel.frame = NSRect(x: 15, y: 20, width: 400, height: 20)
         hotKeyDescLabel.font = NSFont.systemFont(ofSize: 12)
         hotKeyDescLabel.textColor = .secondaryLabelColor
         hotKeyDescLabel.isBordered = false
@@ -1632,11 +1623,11 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         hotKeyDescLabel.backgroundColor = .clear
         hotKeyBox.addSubview(hotKeyDescLabel)
         
-        yPos -= 120
+        yPos -= 130
     }
     
     private func setupPermissionSection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
-        let permissionBox = NSBox(frame: NSRect(x: margin, y: yPos - 80, width: contentView.bounds.width - 2 * margin, height: 80))
+        let permissionBox = NSBox(frame: NSRect(x: margin, y: yPos - 90, width: contentView.bounds.width - 2 * margin, height: 90))
         permissionBox.title = "权限设置"
         permissionBox.boxType = .primary
         permissionBox.cornerRadius = 8
@@ -1645,17 +1636,17 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         contentView.addSubview(permissionBox)
         
         let checkPermissionButton = NSButton(title: "检查权限状态", target: self, action: #selector(checkAndRequestPermissions))
-        checkPermissionButton.frame = NSRect(x: 15, y: 35, width: 120, height: 24)
+        checkPermissionButton.frame = NSRect(x: 15, y: 40, width: 120, height: 30)
         checkPermissionButton.bezelStyle = .rounded
         permissionBox.addSubview(checkPermissionButton)
         
         let openSystemSettingsButton = NSButton(title: "打开系统设置", target: self, action: #selector(openSystemPreferences))
-        openSystemSettingsButton.frame = NSRect(x: 150, y: 35, width: 120, height: 24)
+        openSystemSettingsButton.frame = NSRect(x: 150, y: 40, width: 120, height: 30)
         openSystemSettingsButton.bezelStyle = .rounded
         permissionBox.addSubview(openSystemSettingsButton)
         
         let permissionDescLabel = NSTextField(labelWithString: "管理麦克风和屏幕录制权限")
-        permissionDescLabel.frame = NSRect(x: 15, y: 8, width: 400, height: 20)
+        permissionDescLabel.frame = NSRect(x: 15, y: 20, width: 400, height: 20)
         permissionDescLabel.font = NSFont.systemFont(ofSize: 12)
         permissionDescLabel.textColor = .secondaryLabelColor
         permissionDescLabel.isBordered = false
@@ -1666,12 +1657,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     
     // MARK: - 版本信息
     private func getAppVersion() -> String {
-        if let infoDictionary = Bundle.main.infoDictionary {
-            let version = infoDictionary["CFBundleShortVersionString"] as? String ?? "未知"
-            let build = infoDictionary["CFBundleVersion"] as? String ?? "未知"
-            return "\(version)+\(build)"
-        }
-        return "未知版本"
+        // 对于SPM项目，通常没有标准的Bundle版本信息
+        // 可以手动设置或者从其他地方获取
+        return "1.0.0+1"  // 手动设置版本号
     }
     
     // MARK: - 主题相关
@@ -1743,12 +1731,14 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             
             // 调试：打印所有按键事件
-            print("🎹 按键事件: 键码=\(event.keyCode), 修饰键=\(event.modifierFlags.rawValue)")
+            // print("🎹 按键事件: 键码=\(event.keyCode), 修饰键=\(event.modifierFlags.rawValue)")
             
             // 更精确的快捷键检测 (Command + Shift + Space)
             let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let expectedModifiers: NSEvent.ModifierFlags = [.command, .shift]
             
+            // 调试输出
+            // print("🔍 修饰键检查: 当前=\(modifierFlags.rawValue), 期望=\(expectedModifiers.rawValue), 键码=\(event.keyCode)")
             
             if modifierFlags.contains(.command) && modifierFlags.contains(.shift) && event.keyCode == self.screenshotHotKeyCode {
                 print("🎯 快捷键触发：Command + Shift + Space (键码: \(event.keyCode))")
@@ -1803,10 +1793,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             alert.messageText = "需要辅助功能权限"
             alert.informativeText = "为了使用全局快捷键功能，需要在系统设置中授予辅助功能权限。\n\n步骤：\n1. 系统设置 > 隐私与安全性 > 辅助功能\n2. 找到本应用并勾选\n3. 重新启动应用"
             alert.alertStyle = .warning
-            alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "打开系统设置")
             alert.addButton(withTitle: "稍后设置")
-            
-            let response = alert.runModal()
+        
+        let response = alert.runModal()
             if response == .alertFirstButtonReturn {
                 self.openAccessibilitySettings()
             }
@@ -2445,23 +2435,23 @@ func routes(_ app: Application) throws {
 func handleWebSocketMessage(ws: WebSocket, text: String) async {
     guard !text.isEmpty else { return }
     
-    let decoder = JSONDecoder()
-    guard let data = text.data(using: .utf8) else {
-        print("❌ 无法将消息转换为数据")
-        return
-    }
-    
-    // 尝试解析为截图命令
-    if let command = try? decoder.decode(ScreenshotCommand.self, from: data) {
-        if command.type == "client-screenshot-command" && command.wsEventType == "client-screenshot-command" {
-            print("📸 收到截图命令，ID: \(command.id)")
-            // 直接处理截图命令
-            await handleScreenshotCommand(ws: ws, commandId: command.id)
+        let decoder = JSONDecoder()
+        guard let data = text.data(using: .utf8) else {
+            print("❌ 无法将消息转换为数据")
             return
         }
-    }
-    
-    print("📨 收到未知WebSocket消息: \(text.prefix(100))...")
+        
+        // 尝试解析为截图命令
+        if let command = try? decoder.decode(ScreenshotCommand.self, from: data) {
+            if command.type == "client-screenshot-command" && command.wsEventType == "client-screenshot-command" {
+                print("📸 收到截图命令，ID: \(command.id)")
+                // 直接处理截图命令
+                await handleScreenshotCommand(ws: ws, commandId: command.id)
+                return
+            }
+        }
+        
+        print("📨 收到未知WebSocket消息: \(text.prefix(100))...")
 }
 
 // 处理截图命令
