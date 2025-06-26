@@ -96,6 +96,18 @@ struct ClipboardImagePayload: Content {
     let base64: String
 }
 
+// 键盘事件数据结构
+struct KeydownEvent: Content {
+    let id: String
+    let payload: KeydownPayload
+    let type: String
+    let wsEventType: String
+}
+
+struct KeydownPayload: Content {
+    let keyEventType: String  // "primary" or "secondary"
+}
+
 // 主题模式枚举
 enum ThemeMode: String, CaseIterable {
     case auto = "auto"
@@ -1580,7 +1592,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func setupHotKeySection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
-        let hotKeyBox = NSBox(frame: NSRect(x: margin, y: yPos - 110, width: contentView.bounds.width - 2 * margin, height: 110))
+        let hotKeyBox = NSBox(frame: NSRect(x: margin, y: yPos - 170, width: contentView.bounds.width - 2 * margin, height: 170))
         hotKeyBox.title = "全局快捷键"
         hotKeyBox.boxType = .primary
         hotKeyBox.cornerRadius = 8
@@ -1588,8 +1600,8 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         hotKeyBox.borderColor = getContainerBorderColor()
         contentView.addSubview(hotKeyBox)
         
-        let hotKeyDisplay = NSTextField(labelWithString: "Command + Shift + 空格")
-        hotKeyDisplay.frame = NSRect(x: 15, y: 65, width: 200, height: 20)
+        let hotKeyDisplay = NSTextField(labelWithString: "Command + Shift + 空格 (截图)")
+        hotKeyDisplay.frame = NSRect(x: 15, y: 85, width: 200, height: 20)
         hotKeyDisplay.font = NSFont.systemFont(ofSize: 14, weight: .medium)
         hotKeyDisplay.textColor = .systemBlue
         hotKeyDisplay.isBordered = false
@@ -1597,25 +1609,71 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         hotKeyDisplay.backgroundColor = .clear
         hotKeyBox.addSubview(hotKeyDisplay)
         
-        let enableHotKeyCheckbox = NSButton(checkboxWithTitle: "启用全局截图快捷键", target: self, action: #selector(toggleHotKey(_:)))
-        enableHotKeyCheckbox.frame = NSRect(x: 15, y: 40, width: 200, height: 20)
+        let hotKeyDisplay2 = NSTextField(labelWithString: "Command + Shift + 回车 (Primary)")
+        hotKeyDisplay2.frame = NSRect(x: 15, y: 65, width: 200, height: 20)
+        hotKeyDisplay2.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        hotKeyDisplay2.textColor = .systemGreen
+        hotKeyDisplay2.isBordered = false
+        hotKeyDisplay2.isEditable = false
+        hotKeyDisplay2.backgroundColor = .clear
+        hotKeyBox.addSubview(hotKeyDisplay2)
+        
+        let hotKeyDisplay3 = NSTextField(labelWithString: "Command + Shift + 退格 (Secondary)")
+        hotKeyDisplay3.frame = NSRect(x: 15, y: 65, width: 200, height: 20)
+        hotKeyDisplay3.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        hotKeyDisplay3.textColor = .systemOrange
+        hotKeyDisplay3.isBordered = false
+        hotKeyDisplay3.isEditable = false
+        hotKeyDisplay3.backgroundColor = .clear
+        hotKeyBox.addSubview(hotKeyDisplay3)
+        
+        let hotKeyDisplay4 = NSTextField(labelWithString: "Tab (Primary)")
+        hotKeyDisplay4.frame = NSRect(x: 15, y: 45, width: 200, height: 20)
+        hotKeyDisplay4.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        hotKeyDisplay4.textColor = .systemGreen
+        hotKeyDisplay4.isBordered = false
+        hotKeyDisplay4.isEditable = false
+        hotKeyDisplay4.backgroundColor = .clear
+        hotKeyBox.addSubview(hotKeyDisplay4)
+        
+        let hotKeyDisplay5 = NSTextField(labelWithString: "Esc (Secondary)")
+        hotKeyDisplay5.frame = NSRect(x: 15, y: 25, width: 200, height: 20)
+        hotKeyDisplay5.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        hotKeyDisplay5.textColor = .systemOrange
+        hotKeyDisplay5.isBordered = false
+        hotKeyDisplay5.isEditable = false
+        hotKeyDisplay5.backgroundColor = .clear
+        hotKeyBox.addSubview(hotKeyDisplay5)
+        
+        let enableHotKeyCheckbox = NSButton(checkboxWithTitle: "启用全局快捷键", target: self, action: #selector(toggleHotKey(_:)))
+        enableHotKeyCheckbox.frame = NSRect(x: 15, y: 5, width: 200, height: 20)
         enableHotKeyCheckbox.state = (globalHotKey != nil || localHotKey != nil) ? .on : .off
         hotKeyBox.addSubview(enableHotKeyCheckbox)
         
         // 添加测试按钮
         let testButton = NSButton(title: "测试截图", target: self, action: #selector(testScreenshot))
-        testButton.frame = NSRect(x: 230, y: 55, width: 70, height: 30)
+        testButton.frame = NSRect(x: 230, y: 115, width: 70, height: 30)
         testButton.bezelStyle = .rounded
         hotKeyBox.addSubview(testButton)
         
+        let testPrimaryButton = NSButton(title: "测试Primary", target: self, action: #selector(testPrimaryKey))
+        testPrimaryButton.frame = NSRect(x: 310, y: 115, width: 80, height: 30)
+        testPrimaryButton.bezelStyle = .rounded
+        hotKeyBox.addSubview(testPrimaryButton)
+        
+        let testSecondaryButton = NSButton(title: "测试Secondary", target: self, action: #selector(testSecondaryKey))
+        testSecondaryButton.frame = NSRect(x: 230, y: 85, width: 80, height: 30)
+        testSecondaryButton.bezelStyle = .rounded
+        hotKeyBox.addSubview(testSecondaryButton)
+        
         // 添加权限检查按钮
         let checkPermButton = NSButton(title: "检查权限", target: self, action: #selector(checkHotKeyPermissions))
-        checkPermButton.frame = NSRect(x: 310, y: 55, width: 80, height: 30)
+        checkPermButton.frame = NSRect(x: 320, y: 85, width: 70, height: 30)
         checkPermButton.bezelStyle = .rounded
         hotKeyBox.addSubview(checkPermButton)
         
-        let hotKeyDescLabel = NSTextField(labelWithString: "按下快捷键后会截取屏幕并通过WebSocket发送到客户端")
-        hotKeyDescLabel.frame = NSRect(x: 15, y: 20, width: 400, height: 20)
+        let hotKeyDescLabel = NSTextField(labelWithString: "支持组合键和单独按键，可用于截图和发送键盘事件到WebSocket客户端")
+        hotKeyDescLabel.frame = NSRect(x: 15, y: 25, width: 450, height: 20)
         hotKeyDescLabel.font = NSFont.systemFont(ofSize: 12)
         hotKeyDescLabel.textColor = .secondaryLabelColor
         hotKeyDescLabel.isBordered = false
@@ -1623,7 +1681,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         hotKeyDescLabel.backgroundColor = .clear
         hotKeyBox.addSubview(hotKeyDescLabel)
         
-        yPos -= 130
+        yPos -= 190
     }
     
     private func setupPermissionSection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
@@ -1733,17 +1791,48 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             // 调试：打印所有按键事件
             // print("🎹 按键事件: 键码=\(event.keyCode), 修饰键=\(event.modifierFlags.rawValue)")
             
-            // 更精确的快捷键检测 (Command + Shift + Space)
+            // 更精确的快捷键检测
             let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let expectedModifiers: NSEvent.ModifierFlags = [.command, .shift]
             
             // 调试输出
             // print("🔍 修饰键检查: 当前=\(modifierFlags.rawValue), 期望=\(expectedModifiers.rawValue), 键码=\(event.keyCode)")
             
-            if modifierFlags.contains(.command) && modifierFlags.contains(.shift) && event.keyCode == self.screenshotHotKeyCode {
-                print("🎯 快捷键触发：Command + Shift + Space (键码: \(event.keyCode))")
-                DispatchQueue.main.async {
-                    self.handleScreenshotHotKey()
+            // 检查是否包含所需的修饰键
+            if modifierFlags.contains(.command) && modifierFlags.contains(.shift) {
+                switch event.keyCode {
+                case self.screenshotHotKeyCode: // Space 键 (键码 49)
+                    print("🎯 快捷键触发：Command + Shift + Space (键码: \(event.keyCode))")
+                    DispatchQueue.main.async {
+                        self.handleScreenshotHotKey()
+                    }
+                case 36: // 回车键 (键码 36)
+                    print("🎯 快捷键触发：Command + Shift + Enter (键码: \(event.keyCode))")
+                    DispatchQueue.main.async {
+                        self.handlePrimaryKeyEvent()
+                    }
+                case 51: // 退格键 (键码 51)
+                    print("🎯 快捷键触发：Command + Shift + Backspace (键码: \(event.keyCode))")
+                    DispatchQueue.main.async {
+                        self.handleSecondaryKeyEvent()
+                    }
+                default:
+                    break
+                }
+            } else {
+                // 检查单独的按键（不需要修饰键）
+                switch event.keyCode {
+                case 48: // Tab 键 (键码 48)
+                    print("🎯 快捷键触发：Tab (键码: \(event.keyCode))")
+                    DispatchQueue.main.async {
+                        self.handlePrimaryKeyEvent()
+                    }
+                case 53: // Esc 键 (键码 53)
+                    print("🎯 快捷键触发：Esc (键码: \(event.keyCode))")
+                    DispatchQueue.main.async {
+                        self.handleSecondaryKeyEvent()
+                    }
+                default:
+                    break
                 }
             }
         }
@@ -1814,6 +1903,16 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         handleScreenshotHotKey()
     }
     
+    @objc private func testPrimaryKey() {
+        print("🧪 测试Primary键盘事件...")
+        handlePrimaryKeyEvent()
+    }
+    
+    @objc private func testSecondaryKey() {
+        print("🧪 测试Secondary键盘事件...")
+        handleSecondaryKeyEvent()
+    }
+    
     @objc private func checkHotKeyPermissions() {
         let hasAccessibility = checkAccessibilityPermission()
         let hasScreenRecording = checkScreenRecordingPermission()
@@ -1864,6 +1963,20 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         print("📸 当前时间: \(Date())")
         print("📸 主线程: \(Thread.isMainThread)")
         captureScreenAndSend()
+    }
+    
+    private func handlePrimaryKeyEvent() {
+        print("⌨️ ===== Primary 按键事件触发 =====")
+        print("⌨️ 当前时间: \(Date())")
+        print("⌨️ 主线程: \(Thread.isMainThread)")
+        sendKeydownEvent(type: "primary", id: "oHPzFsnoFYUNlxJGIkCme")
+    }
+    
+    private func handleSecondaryKeyEvent() {
+        print("⌨️ ===== Secondary 按键事件触发 =====")
+        print("⌨️ 当前时间: \(Date())")
+        print("⌨️ 主线程: \(Thread.isMainThread)")
+        sendKeydownEvent(type: "secondary", id: "1muj9eJVcJ1QfVrj6M9-V")
     }
     
     private func captureScreenAndSend() {
@@ -1970,6 +2083,25 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             let audioCapture = AudioCapture.shared
             await audioCapture.sendScreenshotEvent(event)
         }
+    }
+    
+    private func sendKeydownEvent(type: String, id: String) {
+        let keydownEvent = KeydownEvent(
+            id: id,
+            payload: KeydownPayload(keyEventType: type),
+            type: "keydown-event",
+            wsEventType: "keydown-event"
+        )
+        
+        // 发送到WebSocket
+        Task {
+            if #available(macOS 12.3, *) {
+                let audioCapture = AudioCapture.shared
+                await audioCapture.sendKeydownEvent(keydownEvent)
+            }
+        }
+        
+        print("📤 键盘事件已发送到WebSocket - 类型: \(type), ID: \(id)")
     }
     
     // MARK: - 初始化设置

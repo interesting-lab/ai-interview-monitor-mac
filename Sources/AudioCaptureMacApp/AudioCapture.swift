@@ -367,6 +367,43 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         }
     }
     
+    // 发送键盘事件到所有WebSocket连接
+    func sendKeydownEvent<T: Codable>(_ event: T) async {
+        await MainActor.run {
+            let currentWebSockets = webSockets
+            
+            guard !currentWebSockets.isEmpty else { 
+                print("⚠️ 没有活跃的WebSocket连接，无法发送键盘事件")
+                return 
+            }
+            
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.withoutEscapingSlashes]
+                
+                let jsonData = try encoder.encode(event)
+                if let jsonString = String(data: jsonData, encoding: .utf8) {
+                    print("📤 向 \(currentWebSockets.count) 个WebSocket连接发送键盘事件")
+                    print("📤 事件内容: \(jsonString)")
+                    // 为每个WebSocket创建独立的任务
+                    for webSocket in currentWebSockets {
+                        Task {
+                            do {
+                                try await webSocket.send(jsonString)
+                                print("✅ 键盘事件发送成功")
+                            } catch {
+                                print("❌ 键盘事件发送失败: \(error)")
+                                await self.removeWebSocket(webSocket)
+                            }
+                        }
+                    }
+                }
+            } catch {
+                print("❌ 键盘事件JSON编码失败: \(error)")
+            }
+        }
+    }
+    
     func stopGlobalAudioCapture() async {
         print("🛑 停止音频捕获...")
         isCapturing = false
