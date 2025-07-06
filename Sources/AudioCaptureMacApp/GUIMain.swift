@@ -1020,7 +1020,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     
     private func createMainWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 450),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 480),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -1032,8 +1032,8 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
         
         // 禁用窗口大小调整，但允许拖动
-        window.minSize = NSSize(width: 500, height: 450)
-        window.maxSize = NSSize(width: 500, height: 450)
+        window.minSize = NSSize(width: 500, height: 480)
+        window.maxSize = NSSize(width: 500, height: 480)
         
         // 设置动态主题
         updateWindowTheme(window)
@@ -1044,7 +1044,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         contentView.autoresizingMask = [.width, .height]
         window.contentView = contentView
         
-        var yPos: CGFloat = 425
+        var yPos: CGFloat = 455
         let margin: CGFloat = 20
         let boxHeight: CGFloat = 68
         let spacing: CGFloat = 8
@@ -1371,8 +1371,8 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func setupConnectionSection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
-        // 容器视图
-        let containerView = NSView(frame: NSRect(x: margin, y: yPos - 110, width: contentView.bounds.width - 2 * margin, height: 110))
+        // 容器视图 - 增加高度以容纳多行地址
+        let containerView = NSView(frame: NSRect(x: margin, y: yPos - 140, width: contentView.bounds.width - 2 * margin, height: 140))
         containerView.wantsLayer = true
         containerView.layer?.backgroundColor = getContainerBackgroundColor().cgColor
         containerView.layer?.cornerRadius = 12
@@ -1382,7 +1382,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         // 标题
         connectionTitleLabel = NSTextField(labelWithString: "双端互联地址")
-        connectionTitleLabel.frame = NSRect(x: 30, y: 80, width: 150, height: 22)
+        connectionTitleLabel.frame = NSRect(x: 30, y: 110, width: 150, height: 22)
         connectionTitleLabel.font = NSFont.systemFont(ofSize: 16, weight: .medium)
         connectionTitleLabel.textColor = .labelColor
         connectionTitleLabel.isBordered = false
@@ -1391,7 +1391,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         containerView.addSubview(connectionTitleLabel)
         
         // 功能按钮容器
-        let buttonGroup = NSView(frame: NSRect(x: 190, y: 75, width: 250, height: 28))
+        let buttonGroup = NSView(frame: NSRect(x: 190, y: 105, width: 250, height: 28))
         buttonGroup.wantsLayer = true
         buttonGroup.layer?.backgroundColor = getButtonBackgroundColor().cgColor
         buttonGroup.layer?.cornerRadius = 10
@@ -1423,13 +1423,15 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         // 状态信息
         statusInfoLabel = NSTextField(wrappingLabelWithString: "服务尚未启动，请点击\"启动\"按钮。启动后若出现网络权限弹窗，请允许，否则会连接失败。")
-        statusInfoLabel.frame = NSRect(x: 30, y: 15, width: containerView.bounds.width - 60, height: 55)
+        statusInfoLabel.frame = NSRect(x: 30, y: 15, width: containerView.bounds.width - 60, height: 85)
         statusInfoLabel.font = NSFont.systemFont(ofSize: 12)
         statusInfoLabel.textColor = NSColor(red: 1.0, green: 0.6, blue: 0.6, alpha: 1.0)
         statusInfoLabel.isBordered = false
         statusInfoLabel.isEditable = false
         statusInfoLabel.backgroundColor = .clear
         statusInfoLabel.maximumNumberOfLines = 0
+        statusInfoLabel.lineBreakMode = .byWordWrapping
+        statusInfoLabel.usesSingleLineMode = false
         containerView.addSubview(statusInfoLabel)
     }
     
@@ -1743,12 +1745,21 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     
     @objc private func copyAll() {
         let networkIPs = getNetworkInterfaces()
-        let addresses = networkIPs.map { "http://\($0):9047" }.joined(separator: "\n")
+        
+        var addressText = "Interesting Lab 音频服务连接地址：\n\n"
+        for (index, ip) in networkIPs.enumerated() {
+            let prefix = index == 0 ? "主要地址: " : "备用地址: "
+            addressText += "\(prefix)http://\(ip):9047\n"
+            addressText += "WebSocket: ws://\(ip):9047/ws\n"
+            if index < networkIPs.count - 1 {
+                addressText += "\n"
+            }
+        }
         
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(addresses, forType: .string)
-        logMessage("📋 已复制所有服务器地址到剪贴板")
+        pasteboard.setString(addressText, forType: .string)
+        logMessage("📋 已复制所有服务器地址到剪贴板（包含WebSocket地址）")
     }
     
     @objc private func openSettings() {
@@ -2582,12 +2593,18 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                 self.restartButton.isEnabled = true
                 // 获取所有网络接口并显示
                 let networkIPs = getNetworkInterfaces()
-                let primaryIP = networkIPs.first ?? "127.0.0.1"
-                let additionalCount = max(0, networkIPs.count - 1)
                 
-                if additionalCount > 0 {
-                    self.statusInfoLabel.stringValue = "✅ 服务已启动！主要地址: http://\(primaryIP):9047 (共\(networkIPs.count)个地址)"
+                if networkIPs.count > 1 {
+                    // 显示所有地址
+                    var addressList = "✅ 服务已启动！所有可用地址：\n"
+                    for (index, ip) in networkIPs.enumerated() {
+                        let prefix = index == 0 ? "🌟 " : "   • "
+                        addressList += "\(prefix)http://\(ip):9047\n"
+                    }
+                    // 移除最后一个换行符
+                    self.statusInfoLabel.stringValue = String(addressList.dropLast())
                 } else {
+                    let primaryIP = networkIPs.first ?? "127.0.0.1"
                     self.statusInfoLabel.stringValue = "✅ 服务已启动！连接地址: http://\(primaryIP):9047"
                 }
                 self.statusInfoLabel.textColor = .systemGreen
@@ -3192,17 +3209,12 @@ func getNetworkInterfaces() -> [String] {
     
     defer { freeifaddrs(ifaddr) }
     
-    // 需要排除的网络接口前缀
+    // 只排除真正不必要的网络接口前缀
     let excludedPrefixes = [
-        "127.",      // 本地回环
-        "169.254.",  // 链路本地地址
-        "198.18.",   // 测试网络
-        "10.43.",    // 常见的虚拟网卡
-        "10.8.",     // VPN网卡
-        "172.17.",   // Docker网络
-        "172.18.",   // Docker网络
-        "172.19.",   // Docker网络
-        "172.20.",   // Docker网络
+        "127.",      // 本地回环地址
+        "169.254.",  // 链路本地地址 (APIPA)
+        "0.0.0.0",   // 无效地址
+        "255.255.255.255", // 广播地址
     ]
     
     for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
@@ -3211,8 +3223,8 @@ func getNetworkInterfaces() -> [String] {
         // 获取接口名称
         let interfaceName = String(cString: interface.ifa_name)
         
-        // 排除虚拟接口
-        let excludedInterfaces = ["lo", "utun", "awdl", "llw", "bridge", "vnic", "anpi"]
+        // 只排除明显的虚拟接口和系统接口
+        let excludedInterfaces = ["lo0", "lo", "awdl", "llw"]
         if excludedInterfaces.contains(where: { interfaceName.hasPrefix($0) }) {
             continue
         }
@@ -3230,10 +3242,11 @@ func getNetworkInterfaces() -> [String] {
                 let ip = String(cString: inet_ntoa(addr))
                 
                 // 检查是否需要排除的IP地址
-                let shouldExclude = excludedPrefixes.contains { ip.hasPrefix($0) }
+                let shouldExclude = excludedPrefixes.contains { ip.hasPrefix($0) } || ip == "0.0.0.0"
                 
-                if !shouldExclude {
+                if !shouldExclude && !addresses.contains(ip) {
                     addresses.append(ip)
+                    print("🌐 发现网络接口: \(interfaceName) -> \(ip)")
                 }
             }
         }
@@ -3254,7 +3267,7 @@ func getNetworkInterfaces() -> [String] {
             return false
         }
         
-        // 其他私有网络地址次之
+        // 10.x.x.x 私有网络地址
         if ip1.hasPrefix("10.") && !ip2.hasPrefix("10.") {
             return true
         }
@@ -3262,7 +3275,7 @@ func getNetworkInterfaces() -> [String] {
             return false
         }
         
-        // 172.x.x.x 网络
+        // 172.16-172.31.x.x 私有网络地址
         if ip1.hasPrefix("172.") && !ip2.hasPrefix("172.") {
             return true
         }
@@ -3270,9 +3283,34 @@ func getNetworkInterfaces() -> [String] {
             return false
         }
         
+        // 公网地址优先级较低但仍然显示
+        let ip1IsPublic = !isPrivateIP(ip1)
+        let ip2IsPublic = !isPrivateIP(ip2)
+        
+        if ip1IsPublic && !ip2IsPublic {
+            return false
+        }
+        if !ip1IsPublic && ip2IsPublic {
+            return true
+        }
+        
         // 默认按字典序排序
         return ip1 < ip2
     }
     
     return addresses
+}
+
+// 辅助函数：判断是否为私有IP地址
+private func isPrivateIP(_ ip: String) -> Bool {
+    return ip.hasPrefix("192.168.") || 
+           ip.hasPrefix("10.") || 
+           (ip.hasPrefix("172.") && isInRange172(ip))
+}
+
+// 辅助函数：判断172.x.x.x是否在私有范围内 (172.16-172.31)
+private func isInRange172(_ ip: String) -> Bool {
+    let components = ip.split(separator: ".")
+    guard components.count >= 2, let secondOctet = Int(components[1]) else { return false }
+    return secondOctet >= 16 && secondOctet <= 31
 } 
