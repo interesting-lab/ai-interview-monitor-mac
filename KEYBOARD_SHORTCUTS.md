@@ -9,7 +9,7 @@
 2. **`Tab`** - 单独按键触发 Primary 事件
 
 ### Secondary 事件（ID: 1muj9eJVcJ1QfVrj6M9-V）
-以下快捷键会发送 Secondary 键盘事件到 WebSocket：
+以下快捷键会发送 Secondary 键盘事件到 WebSocket：cd
 
 1. **`Command + Shift + Backspace`** - 组合键触发 Secondary 事件
 2. **`Esc`** - 单独按键触发 Secondary 事件

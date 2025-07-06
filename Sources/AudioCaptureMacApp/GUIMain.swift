@@ -132,8 +132,23 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     // 全局快捷键相关
     private var globalHotKey: Any?
     private var localHotKey: Any?
-    private var screenshotHotKeyCode: UInt16 = 49  // 空格键的键码
+    private var screenshotHotKeyCode: UInt16 = 49  // Default: Space
     private var screenshotModifierFlags: NSEvent.ModifierFlags = [.command, .shift]
+    private var primaryHotKeyCode: UInt16 = 36 // Default: Enter
+    private var primaryModifierFlags: NSEvent.ModifierFlags = [.command, .shift]
+    private var secondaryHotKeyCode: UInt16 = 51 // Default: Backspace
+    private var secondaryModifierFlags: NSEvent.ModifierFlags = [.command, .shift]
+    
+    // 快捷键设置相关
+    private var hotKeyCaptureWindow: NSWindow?
+    private var hotKeyCaptureEventMonitor: Any?
+    private var currentlySettingHotKey: String?
+    
+    // 状态栏图标
+    private var statusItem: NSStatusItem?
+    private var screenshotHotKeyLabel: NSTextField!
+    private var primaryHotKeyLabel: NSTextField!
+    private var secondaryHotKeyLabel: NSTextField!
     
     // 主题设置
     private var currentThemeMode: ThemeMode = .auto
@@ -221,8 +236,12 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     private var lastClipboardContent: String = ""
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 动态隐藏Dock图标
+        hideDockIcon()
+        
         setupThemeObserver()
         loadUserPreferences()
+        setupStatusBar()
         createMainWindow()
         checkInitialPermissions()
         startClipboardMonitoring()
@@ -247,6 +266,246 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                 object: nil
             )
         }
+    }
+    
+    private func setupStatusBar() {
+        // 创建状态栏项
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        
+        // 设置状态栏图标
+        if let button = statusItem?.button {
+            button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Audio Capture")
+            button.imagePosition = .imageOnly
+            button.target = self
+            button.action = #selector(statusBarButtonClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+        
+        // 创建菜单
+        createStatusBarMenu()
+        
+        print("✅ 状态栏图标已设置")
+    }
+    
+    private func createStatusBarMenu() {
+        let menu = NSMenu()
+        
+        // 显示主窗口
+        let showWindowItem = NSMenuItem(title: "显示窗口", action: #selector(showMainWindow), keyEquivalent: "")
+        showWindowItem.target = self
+        menu.addItem(showWindowItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
+        // 快捷键设置
+        let hotKeyItem = NSMenuItem(title: "快捷键设置", action: #selector(openHotKeySettings), keyEquivalent: "")
+        hotKeyItem.target = self
+        menu.addItem(hotKeyItem)
+        
+        // 权限检查
+        let permissionItem = NSMenuItem(title: "权限检查", action: #selector(checkHotKeyPermissions), keyEquivalent: "")
+        permissionItem.target = self
+        menu.addItem(permissionItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
+        // 关于
+        let aboutItem = NSMenuItem(title: "关于", action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
+        // 退出
+        let quitItem = NSMenuItem(title: "退出", action: #selector(terminateApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+        
+        statusItem?.menu = menu
+    }
+    
+    @objc private func statusBarButtonClicked() {
+        let event = NSApp.currentEvent!
+        
+        if event.type == NSEvent.EventType.rightMouseUp {
+            // 右键点击显示菜单
+            if let menu = statusItem?.menu {
+                statusItem?.popUpMenu(menu)
+            }
+        } else {
+            // 左键点击显示/隐藏窗口
+            toggleMainWindow()
+        }
+    }
+    
+    @objc private func showMainWindow() {
+        print("🔼 正在尝试显示主窗口...")
+        
+        if let window = window {
+            print("🔼 窗口存在，当前可见性: \(window.isVisible)")
+            
+            // 强制显示窗口
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            
+            print("🔼 窗口显示命令执行完成，当前可见性: \(window.isVisible)")
+        } else {
+            print("❌ 主窗口不存在，需要重新创建")
+            
+            // 如果窗口不存在，重新创建
+            createMainWindow()
+            
+            // 确保UI已设置
+            if !isShowingPermissionScreen {
+                setupUI()
+                setupAudioDevices()
+            }
+            
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+    
+    @objc private func toggleMainWindow() {
+        print("🔄 正在切换主窗口状态...")
+        
+        if let window = window {
+            print("🔄 窗口当前可见性: \(window.isVisible)")
+            
+            if window.isVisible {
+                print("🔽 隐藏窗口")
+                window.orderOut(nil)
+            } else {
+                print("🔼 显示窗口")
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        } else {
+            print("❌ 主窗口不存在，调用showMainWindow")
+            showMainWindow()
+        }
+    }
+    
+    @objc private func openHotKeySettings() {
+        showMainWindow()
+        // 这里可以直接跳转到快捷键设置区域
+    }
+    
+    @objc private func showAbout() {
+        let alert = NSAlert()
+        alert.messageText = "关于 Interesting Lab"
+        alert.informativeText = "音频捕获和转发工具\n版本: 2.1.0\n\n功能特性：\n• 实时音频捕获\n• WebSocket 转发\n• 全局快捷键支持\n• 屏幕截图功能"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "确定")
+        alert.runModal()
+    }
+    
+    @objc private func resetFirstLaunch() {
+        UserDefaults.standard.removeObject(forKey: "hasLaunchedBefore")
+        
+        let alert = NSAlert()
+        alert.messageText = "首次启动状态已重置"
+        alert.informativeText = "下次启动应用时将显示欢迎界面。"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "确定")
+        alert.runModal()
+        
+        print("🔄 首次启动状态已重置")
+    }
+    
+    @objc private func terminateApp() {
+        NSApp.terminate(nil)
+    }
+    
+    private func showFirstLaunchWelcome() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            let alert = NSAlert()
+            alert.messageText = "欢迎使用 Interesting Lab！"
+            alert.informativeText = """
+            🎉 感谢您首次使用本应用！
+            
+            主要功能：
+            • 📱 实时音频捕获和转发
+            • 🌐 WebSocket 客户端连接
+            • ⌨️ 全局快捷键支持
+            • 📸 屏幕截图功能
+            
+            💡 使用提示：
+            • 应用已在右上角菜单栏运行，点击图标可显示/隐藏窗口
+            • 关闭窗口不会退出程序，程序将在后台持续运行
+            • 可通过菜单栏图标右键查看所有选项
+            
+            开始使用吧！
+            """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "开始使用")
+            alert.addButton(withTitle: "查看设置")
+            
+            // 设置图标
+            if #available(macOS 11.0, *) {
+                alert.icon = NSImage(systemSymbolName: "party.popper", accessibilityDescription: "Welcome")
+            }
+            
+            let response = alert.runModal()
+            if response == .alertSecondButtonReturn {
+                // 用户选择查看设置，可以打开设置窗口
+                self.openSettings()
+            }
+                 }
+     }
+     
+     private func showPermissionReminderAfterFirstLaunch() {
+         let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+         let screenRecordingGranted = checkScreenRecordingPermission()
+         
+         // 如果权限已完整，无需提醒
+         if microphoneStatus == .authorized && screenRecordingGranted {
+             return
+         }
+         
+         let alert = NSAlert()
+         alert.messageText = "需要设置权限以使用完整功能"
+         alert.informativeText = """
+         为了让应用发挥最佳性能，建议授予以下权限：
+         
+         🎤 麦克风权限：用于录制您的声音
+         🖥️ 屏幕录制权限：用于录制系统音频
+         
+         您可以：
+         • 现在设置权限以立即使用完整功能
+         • 稍后在应用设置中配置权限
+         • 或继续使用基础功能
+         """
+         alert.alertStyle = .informational
+         alert.addButton(withTitle: "现在设置")
+         alert.addButton(withTitle: "稍后设置")
+         alert.addButton(withTitle: "了解更多")
+         
+         let response = alert.runModal()
+         
+         switch response {
+         case .alertFirstButtonReturn:
+             // 现在设置权限
+             showPermissionScreen()
+         case .alertSecondButtonReturn:
+             // 稍后设置，什么都不做
+             print("📝 用户选择稍后设置权限")
+         case .alertThirdButtonReturn:
+             // 了解更多
+             showHelp()
+         default:
+             break
+         }
+     }
+     
+     private func hideDockIcon() {
+        // 动态设置应用程序激活策略来隐藏Dock图标
+        // 使用 .accessory 策略，这是最适合状态栏应用的设置
+        NSApp.setActivationPolicy(.accessory)
+        print("🔽 Dock图标已隐藏 (状态栏应用模式)")
+        
+        // 如果通过swift run运行，Dock图标可能仍然可见
+        // 这是开发模式的正常行为，构建正式.app包后会完全隐藏
     }
     
     @objc private func systemThemeChanged() {
@@ -318,12 +577,21 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     private func checkInitialPermissions() {
         let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         let screenRecordingGranted = checkScreenRecordingPermission()
+        let isFirstLaunch = !UserDefaults.standard.bool(forKey: "hasLaunchedBefore")
         
         if microphoneStatus == .authorized && screenRecordingGranted {
             // 所有权限已获得，显示主界面
             setupMainInterface()
+        } else if isFirstLaunch {
+            // 第一次启动时，先显示主界面让用户了解应用，然后再处理权限
+            setupMainInterface()
+            
+            // 延迟显示权限提示
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                self.showPermissionReminderAfterFirstLaunch()
+            }
         } else {
-            // 显示权限请求界面
+            // 非首次启动且权限不足，显示权限请求界面
             showPermissionScreen()
         }
     }
@@ -353,7 +621,14 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         setupUI()
         setupAudioDevices()
+        
+        // 检查是否是第一次启动
+        let isFirstLaunch = !UserDefaults.standard.bool(forKey: "hasLaunchedBefore")
+        
+        // 显示主窗口
         window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        
         if let permissionWindow = permissionWindow {
             permissionWindow.close()
             self.permissionWindow = nil
@@ -362,6 +637,12 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         // 确保主题正确设置
         updateTheme()
+        
+        // 如果是第一次启动，显示欢迎信息
+        if isFirstLaunch {
+            showFirstLaunchWelcome()
+            UserDefaults.standard.set(true, forKey: "hasLaunchedBefore")
+        }
         
         // 设置全局快捷键
         print("🎯 准备设置全局快捷键...")
@@ -472,7 +753,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 底部帮助按钮
         let helpButton = NSButton(frame: NSRect(x: 190, y: 15, width: 100, height: 24))
         helpButton.title = "📖 获取帮助"
-        helpButton.bezelStyle = .rounded
+        helpButton.bezelStyle = NSButton.BezelStyle.rounded
         helpButton.target = self
         helpButton.action = #selector(showHelp)
         helpButton.font = NSFont.systemFont(ofSize: 12)
@@ -516,7 +797,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         // 状态按钮
         let statusButton = NSButton(frame: NSRect(x: 270, y: 10, width: 120, height: 32))
-        statusButton.bezelStyle = .rounded
+        statusButton.bezelStyle = NSButton.BezelStyle.rounded
         statusButton.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         
         switch status {
@@ -747,6 +1028,8 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         window.title = "Interesting Lab"
         window.center()
+        window.delegate = self
+        window.isReleasedWhenClosed = false
         
         // 禁用窗口大小调整，但允许拖动
         window.minSize = NSSize(width: 500, height: 450)
@@ -809,13 +1092,13 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         let homeButton = NSButton(frame: NSRect(x: 8, y: 4, width: 70, height: 20))
         homeButton.title = "🏠 首页"
-        homeButton.bezelStyle = .rounded
+        homeButton.bezelStyle = NSButton.BezelStyle.rounded
         homeButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         leftButtonGroup.addSubview(homeButton)
         
         let settingsButton = NSButton(frame: NSRect(x: 82, y: 4, width: 70, height: 20))
         settingsButton.title = "⚙️ 设置"
-        settingsButton.bezelStyle = .rounded
+        settingsButton.bezelStyle = NSButton.BezelStyle.rounded
         settingsButton.target = self
         settingsButton.action = #selector(openSettings)
         settingsButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
@@ -945,7 +1228,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             microphoneRefreshButton.title = "⟲"
             microphoneRefreshButton.font = NSFont.systemFont(ofSize: 24)
         }
-        microphoneRefreshButton.bezelStyle = .rounded
+        microphoneRefreshButton.bezelStyle = NSButton.BezelStyle.rounded
         microphoneRefreshButton.target = self
         microphoneRefreshButton.action = #selector(refreshMicrophoneDevices)
         microphoneRefreshButton.isBordered = true
@@ -1020,7 +1303,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             systemAudioRefreshButton.title = "⟲"
             systemAudioRefreshButton.font = NSFont.systemFont(ofSize: 24)
         }
-        systemAudioRefreshButton.bezelStyle = .rounded
+        systemAudioRefreshButton.bezelStyle = NSButton.BezelStyle.rounded
         systemAudioRefreshButton.target = self
         systemAudioRefreshButton.action = #selector(refreshSystemAudioDevices)
         systemAudioRefreshButton.isBordered = true
@@ -1068,7 +1351,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 重启按钮
         restartButton = NSButton(frame: NSRect(x: 12, y: 6, width: 75, height: 24))
         restartButton.title = "🔄 重启"
-        restartButton.bezelStyle = .rounded
+        restartButton.bezelStyle = NSButton.BezelStyle.rounded
         restartButton.target = self
         restartButton.action = #selector(restartServer)
         restartButton.isEnabled = false
@@ -1078,7 +1361,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 启动按钮
         startButton = NSButton(frame: NSRect(x: 93, y: 6, width: 75, height: 24))
         startButton.title = "▶ 启动"
-        startButton.bezelStyle = .rounded
+        startButton.bezelStyle = NSButton.BezelStyle.rounded
         startButton.target = self
         startButton.action = #selector(startServer)
         startButton.font = NSFont.systemFont(ofSize: 13, weight: .medium)
@@ -1116,7 +1399,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         newVersionButton = NSButton(frame: NSRect(x: 10, y: 4, width: 74, height: 20))
         newVersionButton.title = "使用新版"
-        newVersionButton.bezelStyle = .rounded
+        newVersionButton.bezelStyle = NSButton.BezelStyle.rounded
         newVersionButton.target = self
         newVersionButton.action = #selector(useNewVersion)
         newVersionButton.font = NSFont.systemFont(ofSize: 11, weight: .medium)
@@ -1124,7 +1407,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         qrCodeButton = NSButton(frame: NSRect(x: 90, y: 4, width: 74, height: 20))
         qrCodeButton.title = "扫码连接"
-        qrCodeButton.bezelStyle = .rounded
+        qrCodeButton.bezelStyle = NSButton.BezelStyle.rounded
         qrCodeButton.target = self
         qrCodeButton.action = #selector(showQRCode)
         qrCodeButton.font = NSFont.systemFont(ofSize: 11, weight: .medium)
@@ -1132,7 +1415,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         copyAllButton = NSButton(frame: NSRect(x: 170, y: 4, width: 74, height: 20))
         copyAllButton.title = "复制全部"
-        copyAllButton.bezelStyle = .rounded
+        copyAllButton.bezelStyle = NSButton.BezelStyle.rounded
         copyAllButton.target = self
         copyAllButton.action = #selector(copyAll)
         copyAllButton.font = NSFont.systemFont(ofSize: 11, weight: .medium)
@@ -1487,6 +1770,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         settingsWindow?.title = "设置"
         settingsWindow?.center()
         settingsWindow?.delegate = self
+        settingsWindow?.isReleasedWhenClosed = false
         
         // 设置动态主题
         updateWindowTheme(settingsWindow!)
@@ -1592,7 +1876,8 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func setupHotKeySection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
-        let hotKeyBox = NSBox(frame: NSRect(x: margin, y: yPos - 170, width: contentView.bounds.width - 2 * margin, height: 170))
+        let boxHeight: CGFloat = 190
+        let hotKeyBox = NSBox(frame: NSRect(x: margin, y: yPos - boxHeight, width: contentView.bounds.width - 2 * margin, height: boxHeight))
         hotKeyBox.title = "全局快捷键"
         hotKeyBox.boxType = .primary
         hotKeyBox.cornerRadius = 8
@@ -1600,88 +1885,98 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         hotKeyBox.borderColor = getContainerBorderColor()
         contentView.addSubview(hotKeyBox)
         
-        let hotKeyDisplay = NSTextField(labelWithString: "Command + Shift + 空格 (截图)")
-        hotKeyDisplay.frame = NSRect(x: 15, y: 85, width: 200, height: 20)
-        hotKeyDisplay.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        hotKeyDisplay.textColor = .systemBlue
-        hotKeyDisplay.isBordered = false
-        hotKeyDisplay.isEditable = false
-        hotKeyDisplay.backgroundColor = .clear
-        hotKeyBox.addSubview(hotKeyDisplay)
+        var y: CGFloat = boxHeight - 55
         
-        let hotKeyDisplay2 = NSTextField(labelWithString: "Command + Shift + 回车 (Primary)")
-        hotKeyDisplay2.frame = NSRect(x: 15, y: 65, width: 200, height: 20)
-        hotKeyDisplay2.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        hotKeyDisplay2.textColor = .systemGreen
-        hotKeyDisplay2.isBordered = false
-        hotKeyDisplay2.isEditable = false
-        hotKeyDisplay2.backgroundColor = .clear
-        hotKeyBox.addSubview(hotKeyDisplay2)
+        screenshotHotKeyLabel = NSTextField(labelWithString: "")
+        screenshotHotKeyLabel.frame = NSRect(x: 15, y: y, width: 240, height: 20)
+        screenshotHotKeyLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        screenshotHotKeyLabel.textColor = .systemBlue
+        screenshotHotKeyLabel.isBordered = false
+        screenshotHotKeyLabel.isEditable = false
+        screenshotHotKeyLabel.backgroundColor = .clear
+        hotKeyBox.addSubview(screenshotHotKeyLabel)
         
-        let hotKeyDisplay3 = NSTextField(labelWithString: "Command + Shift + 退格 (Secondary)")
-        hotKeyDisplay3.frame = NSRect(x: 15, y: 65, width: 200, height: 20)
-        hotKeyDisplay3.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        hotKeyDisplay3.textColor = .systemOrange
-        hotKeyDisplay3.isBordered = false
-        hotKeyDisplay3.isEditable = false
-        hotKeyDisplay3.backgroundColor = .clear
-        hotKeyBox.addSubview(hotKeyDisplay3)
+        y -= 25
+        primaryHotKeyLabel = NSTextField(labelWithString: "")
+        primaryHotKeyLabel.frame = NSRect(x: 15, y: y, width: 240, height: 20)
+        primaryHotKeyLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        primaryHotKeyLabel.textColor = .systemGreen
+        primaryHotKeyLabel.isBordered = false
+        primaryHotKeyLabel.isEditable = false
+        primaryHotKeyLabel.backgroundColor = .clear
+        hotKeyBox.addSubview(primaryHotKeyLabel)
         
-        let hotKeyDisplay4 = NSTextField(labelWithString: "Tab (Primary)")
-        hotKeyDisplay4.frame = NSRect(x: 15, y: 45, width: 200, height: 20)
-        hotKeyDisplay4.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        hotKeyDisplay4.textColor = .systemGreen
-        hotKeyDisplay4.isBordered = false
-        hotKeyDisplay4.isEditable = false
-        hotKeyDisplay4.backgroundColor = .clear
-        hotKeyBox.addSubview(hotKeyDisplay4)
+        y -= 25
+        secondaryHotKeyLabel = NSTextField(labelWithString: "")
+        secondaryHotKeyLabel.frame = NSRect(x: 15, y: y, width: 240, height: 20)
+        secondaryHotKeyLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        secondaryHotKeyLabel.textColor = .systemOrange
+        secondaryHotKeyLabel.isBordered = false
+        secondaryHotKeyLabel.isEditable = false
+        secondaryHotKeyLabel.backgroundColor = .clear
+        hotKeyBox.addSubview(secondaryHotKeyLabel)
         
-        let hotKeyDisplay5 = NSTextField(labelWithString: "Esc (Secondary)")
-        hotKeyDisplay5.frame = NSRect(x: 15, y: 25, width: 200, height: 20)
-        hotKeyDisplay5.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        hotKeyDisplay5.textColor = .systemOrange
-        hotKeyDisplay5.isBordered = false
-        hotKeyDisplay5.isEditable = false
-        hotKeyDisplay5.backgroundColor = .clear
-        hotKeyBox.addSubview(hotKeyDisplay5)
-        
-        let enableHotKeyCheckbox = NSButton(checkboxWithTitle: "启用全局快捷键", target: self, action: #selector(toggleHotKey(_:)))
-        enableHotKeyCheckbox.frame = NSRect(x: 15, y: 5, width: 200, height: 20)
-        enableHotKeyCheckbox.state = (globalHotKey != nil || localHotKey != nil) ? .on : .off
-        hotKeyBox.addSubview(enableHotKeyCheckbox)
-        
-        // 添加测试按钮
-        let testButton = NSButton(title: "测试截图", target: self, action: #selector(testScreenshot))
-        testButton.frame = NSRect(x: 230, y: 115, width: 70, height: 30)
-        testButton.bezelStyle = .rounded
-        hotKeyBox.addSubview(testButton)
-        
-        let testPrimaryButton = NSButton(title: "测试Primary", target: self, action: #selector(testPrimaryKey))
-        testPrimaryButton.frame = NSRect(x: 310, y: 115, width: 80, height: 30)
-        testPrimaryButton.bezelStyle = .rounded
-        hotKeyBox.addSubview(testPrimaryButton)
-        
-        let testSecondaryButton = NSButton(title: "测试Secondary", target: self, action: #selector(testSecondaryKey))
-        testSecondaryButton.frame = NSRect(x: 230, y: 85, width: 80, height: 30)
-        testSecondaryButton.bezelStyle = .rounded
-        hotKeyBox.addSubview(testSecondaryButton)
-        
-        // 添加权限检查按钮
-        let checkPermButton = NSButton(title: "检查权限", target: self, action: #selector(checkHotKeyPermissions))
-        checkPermButton.frame = NSRect(x: 320, y: 85, width: 70, height: 30)
-        checkPermButton.bezelStyle = .rounded
-        hotKeyBox.addSubview(checkPermButton)
-        
-        let hotKeyDescLabel = NSTextField(labelWithString: "支持组合键和单独按键，可用于截图和发送键盘事件到WebSocket客户端")
-        hotKeyDescLabel.frame = NSRect(x: 15, y: 25, width: 450, height: 20)
+
+
+        updateHotKeyLabels()
+
+        y -= 35
+        let hotKeyDescLabel = NSTextField(labelWithString: "支持组合键，可用于截图和发送键盘事件到WebSocket客户端")
+        hotKeyDescLabel.frame = NSRect(x: 15, y: y, width: 420, height: 16)
         hotKeyDescLabel.font = NSFont.systemFont(ofSize: 12)
         hotKeyDescLabel.textColor = .secondaryLabelColor
         hotKeyDescLabel.isBordered = false
         hotKeyDescLabel.isEditable = false
         hotKeyDescLabel.backgroundColor = .clear
         hotKeyBox.addSubview(hotKeyDescLabel)
+
+        y -= 25
+        let enableHotKeyCheckbox = NSButton(checkboxWithTitle: "启用全局快捷键", target: self, action: #selector(toggleHotKey(_:)))
+        enableHotKeyCheckbox.frame = NSRect(x: 15, y: y, width: 200, height: 20)
+        enableHotKeyCheckbox.state = (globalHotKey != nil || localHotKey != nil) ? .on : .off
+        hotKeyBox.addSubview(enableHotKeyCheckbox)
         
-        yPos -= 190
+        // "设置" 按钮
+        var setButtonY = boxHeight - 55
+        let setButtonWidth: CGFloat = 60
+        let setButtonHeight: CGFloat = 22
+
+        let setScreenshotButton = NSButton(title: "设置", target: self, action: #selector(setHotKey))
+        setScreenshotButton.frame = NSRect(x: 260, y: setButtonY, width: setButtonWidth, height: setButtonHeight)
+        setScreenshotButton.bezelStyle = NSButton.BezelStyle.rounded
+        setScreenshotButton.tag = 0
+        hotKeyBox.addSubview(setScreenshotButton)
+
+        setButtonY -= 25
+        let setPrimaryButton = NSButton(title: "设置", target: self, action: #selector(setHotKey))
+        setPrimaryButton.frame = NSRect(x: 260, y: setButtonY, width: setButtonWidth, height: setButtonHeight)
+        setPrimaryButton.bezelStyle = NSButton.BezelStyle.rounded
+        setPrimaryButton.tag = 1
+        hotKeyBox.addSubview(setPrimaryButton)
+
+        setButtonY -= 25
+        let setSecondaryButton = NSButton(title: "设置", target: self, action: #selector(setHotKey))
+        setSecondaryButton.frame = NSRect(x: 260, y: setButtonY, width: setButtonWidth, height: setButtonHeight)
+        setSecondaryButton.bezelStyle = NSButton.BezelStyle.rounded
+        setSecondaryButton.tag = 2
+        hotKeyBox.addSubview(setSecondaryButton)
+
+
+        
+        // Test buttons on the right side
+        var buttonY: CGFloat = boxHeight - 80
+        let buttonWidth: CGFloat = 110
+        let buttonHeight: CGFloat = 28
+
+
+        
+        buttonY -= 35
+        let checkPermButton = NSButton(title: "检查权限", target: self, action: #selector(checkHotKeyPermissions))
+        checkPermButton.frame = NSRect(x: 330, y: buttonY, width: buttonWidth, height: buttonHeight)
+        checkPermButton.bezelStyle = NSButton.BezelStyle.rounded
+        hotKeyBox.addSubview(checkPermButton)
+        
+        yPos -= (boxHeight + 20)
     }
     
     private func setupPermissionSection(contentView: NSView, yPos: inout CGFloat, margin: CGFloat) {
@@ -1695,12 +1990,12 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         let checkPermissionButton = NSButton(title: "检查权限状态", target: self, action: #selector(checkAndRequestPermissions))
         checkPermissionButton.frame = NSRect(x: 15, y: 40, width: 120, height: 30)
-        checkPermissionButton.bezelStyle = .rounded
+        checkPermissionButton.bezelStyle = NSButton.BezelStyle.rounded
         permissionBox.addSubview(checkPermissionButton)
         
         let openSystemSettingsButton = NSButton(title: "打开系统设置", target: self, action: #selector(openSystemPreferences))
         openSystemSettingsButton.frame = NSRect(x: 150, y: 40, width: 120, height: 30)
-        openSystemSettingsButton.bezelStyle = .rounded
+        openSystemSettingsButton.bezelStyle = NSButton.BezelStyle.rounded
         permissionBox.addSubview(openSystemSettingsButton)
         
         let permissionDescLabel = NSTextField(labelWithString: "管理麦克风和屏幕录制权限")
@@ -1718,6 +2013,166 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 对于SPM项目，通常没有标准的Bundle版本信息
         // 可以手动设置或者从其他地方获取
         return "1.0.0+1"  // 手动设置版本号
+    }
+    
+    // MARK: - 快捷键设置
+    
+    @objc private func setHotKey(_ sender: NSButton) {
+        let keyType: String
+        switch sender.tag {
+        case 0: keyType = "screenshot"
+        case 1: keyType = "primary"
+        case 2: keyType = "secondary"
+        default: return
+        }
+        currentlySettingHotKey = keyType
+        showHotKeyCaptureWindow()
+    }
+    
+    private func showHotKeyCaptureWindow() {
+        // 如果窗口已经存在，先清理再重新创建，确保状态干净
+        if hotKeyCaptureWindow != nil {
+            cancelHotKeyCapture()
+        }
+
+        hotKeyCaptureWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        hotKeyCaptureWindow?.center()
+        hotKeyCaptureWindow?.title = "设置快捷键"
+        hotKeyCaptureWindow?.isReleasedWhenClosed = false
+        hotKeyCaptureWindow?.delegate = self
+
+        let contentView = hotKeyCaptureWindow!.contentView!
+        let label = NSTextField(labelWithString: "请按下新的快捷键组合...")
+        label.frame = NSRect(x: 20, y: 60, width: 260, height: 24)
+        label.font = NSFont.systemFont(ofSize: 16)
+        label.alignment = .center
+        contentView.addSubview(label)
+
+        let cancelButton = NSButton(title: "取消", target: self, action: #selector(cancelHotKeyCapture))
+        cancelButton.frame = NSRect(x: 110, y: 20, width: 80, height: 30)
+        contentView.addSubview(cancelButton)
+
+        hotKeyCaptureEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+
+            // 忽略纯修饰键和重复事件
+            if event.isARepeat || event.characters?.isEmpty == true {
+                 return event
+            }
+            
+            if let keyType = self.currentlySettingHotKey {
+                self.updateHotKey(type: keyType, keyCode: event.keyCode, modifiers: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+                self.cancelHotKeyCapture()
+                return nil // 消耗事件
+            }
+            return event
+        }
+        
+        hotKeyCaptureWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func cancelHotKeyCapture() {
+        print("🔧 开始清理快捷键捕获窗口...")
+        
+        // 先清理事件监听器
+        if let monitor = hotKeyCaptureEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            hotKeyCaptureEventMonitor = nil
+            print("🔧 事件监听器已清理")
+        }
+        
+        // 清理状态
+        currentlySettingHotKey = nil
+        print("🔧 快捷键设置状态已清理")
+        
+        // 关闭并释放窗口（只有当窗口存在且未在关闭过程中时）
+        if let window = hotKeyCaptureWindow {
+            window.delegate = nil  // 移除delegate避免循环调用
+            if window.isVisible {  // 只有窗口可见时才关闭
+                window.close()
+                print("🔧 窗口已关闭")
+            }
+            hotKeyCaptureWindow = nil
+            print("🔧 窗口引用已清理")
+        }
+        
+        print("🔧 快捷键捕获窗口清理完成")
+    }
+
+    private func updateHotKey(type: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
+        switch type {
+        case "screenshot":
+            screenshotHotKeyCode = keyCode
+            screenshotModifierFlags = modifiers
+        case "primary":
+            primaryHotKeyCode = keyCode
+            primaryModifierFlags = modifiers
+        case "secondary":
+            secondaryHotKeyCode = keyCode
+            secondaryModifierFlags = modifiers
+        default:
+            break
+        }
+        
+        updateHotKeyLabels()
+        saveHotKeyPreference(type: type, keyCode: keyCode, modifiers: modifiers)
+        setupGlobalHotKey() // 重新注册快捷键
+    }
+
+    private func updateHotKeyLabels() {
+        screenshotHotKeyLabel.stringValue = "\(hotkeyToString(keyCode: screenshotHotKeyCode, modifiers: screenshotModifierFlags)) (截图)"
+        primaryHotKeyLabel.stringValue = "\(hotkeyToString(keyCode: primaryHotKeyCode, modifiers: primaryModifierFlags)) (触发快答)"
+        secondaryHotKeyLabel.stringValue = "\(hotkeyToString(keyCode: secondaryHotKeyCode, modifiers: secondaryModifierFlags)) (待定)"
+    }
+
+    private func hotkeyToString(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> String {
+        var parts: [String] = []
+        if modifiers.contains(.control) { parts.append("⌃") }
+        if modifiers.contains(.option) { parts.append("⌥") }
+        if modifiers.contains(.shift) { parts.append("⇧") }
+        if modifiers.contains(.command) { parts.append("⌘") }
+
+        // https://eastmanreference.com/complete-list-of-apples-virtual-key-codes
+        let keyMap: [UInt16: String] = [
+            36: "Enter", 48: "Tab", 49: "Space", 51: "Backspace", 53: "Esc",
+            122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6",
+            98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12"
+        ]
+        
+        if let specialKey = keyMap[keyCode] {
+            parts.append(specialKey)
+        } else {
+            // Simplified key name extraction
+            let dummyEvent = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: keyCode)
+            if let chars = dummyEvent?.charactersIgnoringModifiers?.uppercased(), !chars.isEmpty {
+                parts.append(chars)
+            } else {
+                parts.append("Key \(keyCode)")
+            }
+        }
+
+        return parts.joined(separator: " + ")
+    }
+    
+    private func saveHotKeyPreference(type: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
+        UserDefaults.standard.set(Int(keyCode), forKey: "\(type)_keyCode")
+        UserDefaults.standard.set(modifiers.rawValue, forKey: "\(type)_modifiers")
+    }
+
+    private func loadHotKeyPreferences() {
+        if let code = UserDefaults.standard.value(forKey: "screenshot_keyCode") as? Int { screenshotHotKeyCode = UInt16(code) }
+        if let mods = UserDefaults.standard.value(forKey: "screenshot_modifiers") as? UInt { screenshotModifierFlags = NSEvent.ModifierFlags(rawValue: mods) }
+        
+        if let code = UserDefaults.standard.value(forKey: "primary_keyCode") as? Int { primaryHotKeyCode = UInt16(code) }
+        if let mods = UserDefaults.standard.value(forKey: "primary_modifiers") as? UInt { primaryModifierFlags = NSEvent.ModifierFlags(rawValue: mods) }
+
+        if let code = UserDefaults.standard.value(forKey: "secondary_keyCode") as? Int { secondaryHotKeyCode = UInt16(code) }
+        if let mods = UserDefaults.standard.value(forKey: "secondary_modifiers") as? UInt { secondaryModifierFlags = NSEvent.ModifierFlags(rawValue: mods) }
     }
     
     // MARK: - 主题相关
@@ -1788,52 +2243,19 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         let keyEventHandler: (NSEvent) -> Void = { [weak self] event in
             guard let self = self else { return }
             
-            // 调试：打印所有按键事件
-            // print("🎹 按键事件: 键码=\(event.keyCode), 修饰键=\(event.modifierFlags.rawValue)")
-            
             // 更精确的快捷键检测
             let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             
-            // 调试输出
-            // print("🔍 修饰键检查: 当前=\(modifierFlags.rawValue), 期望=\(expectedModifiers.rawValue), 键码=\(event.keyCode)")
-            
-            // 检查是否包含所需的修饰键
-            if modifierFlags.contains(.command) && modifierFlags.contains(.shift) {
-                switch event.keyCode {
-                case self.screenshotHotKeyCode: // Space 键 (键码 49)
-                    print("🎯 快捷键触发：Command + Shift + Space (键码: \(event.keyCode))")
-                    DispatchQueue.main.async {
-                        self.handleScreenshotHotKey()
-                    }
-                case 36: // 回车键 (键码 36)
-                    print("🎯 快捷键触发：Command + Shift + Enter (键码: \(event.keyCode))")
-                    DispatchQueue.main.async {
-                        self.handlePrimaryKeyEvent()
-                    }
-                case 51: // 退格键 (键码 51)
-                    print("🎯 快捷键触发：Command + Shift + Backspace (键码: \(event.keyCode))")
-                    DispatchQueue.main.async {
-                        self.handleSecondaryKeyEvent()
-                    }
-                default:
-                    break
-                }
-            } else {
-                // 检查单独的按键（不需要修饰键）
-                switch event.keyCode {
-                case 48: // Tab 键 (键码 48)
-                    print("🎯 快捷键触发：Tab (键码: \(event.keyCode))")
-                    DispatchQueue.main.async {
-                        self.handlePrimaryKeyEvent()
-                    }
-                case 53: // Esc 键 (键码 53)
-                    print("🎯 快捷键触发：Esc (键码: \(event.keyCode))")
-                    DispatchQueue.main.async {
-                        self.handleSecondaryKeyEvent()
-                    }
-                default:
-                    break
-                }
+            // 检查快捷键（支持带修饰键和无修饰键）
+            if modifierFlags == self.screenshotModifierFlags && event.keyCode == self.screenshotHotKeyCode {
+                print("🎯 快捷键触发：截图 (键码=\(event.keyCode), 修饰键=\(modifierFlags.rawValue))")
+                DispatchQueue.main.async { self.handleScreenshotHotKey() }
+            } else if modifierFlags == self.primaryModifierFlags && event.keyCode == self.primaryHotKeyCode {
+                print("🎯 快捷键触发：Primary (键码=\(event.keyCode), 修饰键=\(modifierFlags.rawValue))")
+                DispatchQueue.main.async { self.handlePrimaryKeyEvent() }
+            } else if modifierFlags == self.secondaryModifierFlags && event.keyCode == self.secondaryHotKeyCode {
+                print("🎯 快捷键触发：Secondary (键码=\(event.keyCode), 修饰键=\(modifierFlags.rawValue))")
+                DispatchQueue.main.async { self.handleSecondaryKeyEvent() }
             }
         }
         
@@ -1845,9 +2267,15 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         // 同时监听本地事件（自己应用的事件）
         localHotKey = NSEvent.addLocalMonitorForEvents(matching: options) { event in
-            // 只处理特定的按键事件，减少对输入法的干扰
-            if event.keyCode == self.screenshotHotKeyCode || 
-               (event.modifierFlags.contains(.command) && event.modifierFlags.contains(.shift)) {
+            // 检查是否为已配置的快捷键
+            let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let isConfiguredHotKey = (
+                (modifierFlags == self.screenshotModifierFlags && event.keyCode == self.screenshotHotKeyCode) ||
+                (modifierFlags == self.primaryModifierFlags && event.keyCode == self.primaryHotKeyCode) ||
+                (modifierFlags == self.secondaryModifierFlags && event.keyCode == self.secondaryHotKeyCode)
+            )
+            
+            if isConfiguredHotKey {
                 keyEventHandler(event)
             }
             return event // 返回事件以继续传播
@@ -1860,7 +2288,13 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         print("✅ 本地事件监听器: \(localSuccess ? "成功" : "失败")")
         
         if globalSuccess || localSuccess {
-            print("✅ 全局快捷键注册成功 (Command + Shift + Space)")
+            let screenshotKey = hotkeyToString(keyCode: screenshotHotKeyCode, modifiers: screenshotModifierFlags)
+            let primaryKey = hotkeyToString(keyCode: primaryHotKeyCode, modifiers: primaryModifierFlags)
+            let secondaryKey = hotkeyToString(keyCode: secondaryHotKeyCode, modifiers: secondaryModifierFlags)
+            print("✅ 全局快捷键注册成功:")
+            print("   截图: \(screenshotKey)")
+            print("   Primary: \(primaryKey)")
+            print("   Secondary: \(secondaryKey)")
             // 保存设置
             UserDefaults.standard.set(true, forKey: "hotKeyEnabled")
         } else {
@@ -2112,6 +2546,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         let themeString = UserDefaults.standard.string(forKey: "themeMode") ?? ThemeMode.auto.rawValue
         currentThemeMode = ThemeMode(rawValue: themeString) ?? .auto
         print("🎨 主题模式: \(currentThemeMode.displayName)")
+        
+        // 加载快捷键设置
+        loadHotKeyPreferences()
         
         // 检查快捷键设置，默认启用
         let hasHotKeyPreference = UserDefaults.standard.object(forKey: "hotKeyEnabled") != nil
@@ -2423,6 +2860,12 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         print("🛑 应用即将退出，清理资源...")
         
+        // 清理状态栏图标
+        if let statusItem = statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+            self.statusItem = nil
+        }
+        
         // 停止剪贴板监听
         stopClipboardMonitoring()
         
@@ -2448,13 +2891,25 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return true
+        // 不要在最后一个窗口关闭后退出应用程序
+        print("🔽 所有窗口已关闭，但应用程序继续在后台运行")
+        return false
     }
+    
+    // 不再需要处理Dock图标点击，因为应用已设置为不显示Dock图标
+    // func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {}
 }
 
 // MARK: - NSWindowDelegate
 extension AudioServerApp: NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // 如果是主窗口，隐藏窗口而不是关闭
+        if sender == window {
+            print("🔽 主窗口关闭，隐藏到后台")
+            sender.orderOut(nil)
+            return false
+        }
+        
         // 如果是权限窗口且权限未完全获得，不允许关闭
         if sender == permissionWindow && isShowingPermissionScreen {
             let microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -2475,7 +2930,24 @@ extension AudioServerApp: NSWindowDelegate {
                 return false
             }
         }
+        
         return true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+
+        if window == hotKeyCaptureWindow {
+            // 只清理事件监听器和状态，不再次关闭窗口（避免循环调用）
+            if let monitor = hotKeyCaptureEventMonitor {
+                NSEvent.removeMonitor(monitor)
+                hotKeyCaptureEventMonitor = nil
+            }
+            currentlySettingHotKey = nil
+            // 将窗口引用设为nil，但不调用close()（因为窗口已经在关闭过程中）
+            hotKeyCaptureWindow = nil
+            print("🔧 快捷键捕获窗口关闭时清理资源")
+        }
     }
 }
 
