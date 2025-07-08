@@ -175,6 +175,15 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         return false
     }
     
+    // 当前实际应该使用的主题模式（考虑用户设置）
+    private var currentDarkMode: Bool {
+        switch currentThemeMode {
+        case .dark: return true
+        case .light: return false
+        case .auto: return isDarkMode
+        }
+    }
+    
     // 版本信息
     private var versionLabel: NSTextField!
     
@@ -327,15 +336,11 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     @objc private func statusBarButtonClicked() {
         let event = NSApp.currentEvent!
         
-        if event.type == NSEvent.EventType.rightMouseUp {
-            // 右键点击显示菜单
-            if let menu = statusItem?.menu {
-                statusItem?.popUpMenu(menu)
-            }
-        } else {
-            // 左键点击显示/隐藏窗口
+        // 只处理左键点击，右键点击由系统自动处理菜单显示
+        if event.type == NSEvent.EventType.leftMouseUp {
             toggleMainWindow()
         }
+        // 右键点击无需处理，系统会自动显示菜单（因为已设置 statusItem.menu）
     }
     
     @objc private func showMainWindow() {
@@ -510,14 +515,27 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     
     @objc private func systemThemeChanged() {
         DispatchQueue.main.async {
-            print("🎨 主题变化检测到，当前是深色模式: \(self.isDarkMode)")
-            self.updateTheme()
+            // 只有在自动模式下才响应系统主题变化
+            if self.currentThemeMode == .auto {
+                print("🎨 系统主题变化检测到，当前是深色模式: \(self.isDarkMode)")
+                self.updateTheme()
+            } else {
+                print("🎨 系统主题变化检测到，但当前使用强制主题模式: \(self.currentThemeMode.displayName)")
+            }
         }
     }
     
     private func updateTheme() {
-        // 更新主窗口主题
-        updateWindowTheme(window)
+        // 更新主窗口主题（如果窗口已创建）
+        if let window = window {
+            updateWindowTheme(window)
+        }
+        
+        // 更新设置窗口主题
+        if let settingsWindow = settingsWindow {
+            updateWindowTheme(settingsWindow)
+            setupSettingsUI() // 重新设置设置界面以应用新主题
+        }
         
         // 更新权限窗口主题
         if let permissionWindow = permissionWindow {
@@ -525,25 +543,40 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             setupPermissionUI() // 重新设置权限界面以应用新主题
         }
         
-        // 如果主界面已显示，重新设置UI
-        if !isShowingPermissionScreen {
+        // 如果主界面已显示，重新设置UI（只有在窗口存在时）
+        if !isShowingPermissionScreen && window != nil {
             setupUI()
             setupAudioDevices()
         }
     }
     
-    private func updateWindowTheme(_ window: NSWindow) {
+    private func updateWindowTheme(_ window: NSWindow?) {
+        guard let window = window else { return }
+        
+        // 根据当前主题模式设置外观
         if #available(macOS 10.14, *) {
-            window.appearance = nil // 使用系统默认外观
+            switch currentThemeMode {
+            case .auto:
+                window.appearance = nil // 使用系统默认外观
+            case .light:
+                window.appearance = NSAppearance(named: .aqua)
+            case .dark:
+                window.appearance = NSAppearance(named: .darkAqua)
+            }
         }
         
         // 更新背景色
         window.contentView?.wantsLayer = true
         window.contentView?.layer?.backgroundColor = getBackgroundColor()
+        
+        print("🎨 窗口主题已更新 - 模式: \(currentThemeMode.displayName), 深色: \(currentDarkMode)")
     }
     
     private func getBackgroundColor() -> CGColor {
-        if isDarkMode {
+        let isDark = currentDarkMode
+        print("🎨 getBackgroundColor - currentDarkMode: \(isDark), 模式: \(currentThemeMode.displayName)")
+        
+        if isDark {
             return NSColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0).cgColor
         } else {
             return NSColor(red: 0.95, green: 0.95, blue: 0.95, alpha: 1.0).cgColor
@@ -551,7 +584,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func getContainerBackgroundColor() -> NSColor {
-        if isDarkMode {
+        if currentDarkMode {
             return NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1.0)
         } else {
             return NSColor(red: 0.98, green: 0.98, blue: 0.98, alpha: 1.0)
@@ -559,7 +592,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func getContainerBorderColor() -> NSColor {
-        if isDarkMode {
+        if currentDarkMode {
             return NSColor(red: 0.25, green: 0.25, blue: 0.25, alpha: 1.0)
         } else {
             return NSColor(red: 0.8, green: 0.8, blue: 0.8, alpha: 1.0)
@@ -567,7 +600,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func getButtonBackgroundColor() -> NSColor {
-        if isDarkMode {
+        if currentDarkMode {
             return NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 1.0)
         } else {
             return NSColor(red: 0.92, green: 0.92, blue: 0.92, alpha: 1.0)
@@ -1035,8 +1068,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         window.minSize = NSSize(width: 500, height: 480)
         window.maxSize = NSSize(width: 500, height: 480)
         
-        // 设置动态主题
-        updateWindowTheme(window)
+        // 应用当前主题设置
+        updateThemeForMode(currentThemeMode)
+        
+        print("✅ 主窗口已创建并应用主题: \(currentThemeMode.displayName)")
     }
     
     private func setupUI() {
@@ -1783,8 +1818,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         settingsWindow?.delegate = self
         settingsWindow?.isReleasedWhenClosed = false
         
-        // 设置动态主题
-        updateWindowTheme(settingsWindow!)
+        // 应用当前主题设置
+        if let settingsWindow = settingsWindow {
+            updateWindowTheme(settingsWindow)
+        }
         
         setupSettingsUI()
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -1795,6 +1832,11 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         
         let contentView = NSView(frame: settingsWindow.contentView!.bounds)
         contentView.autoresizingMask = [.width, .height]
+        
+        // 设置内容视图的背景色以匹配当前主题
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = getBackgroundColor()
+        
         settingsWindow.contentView = contentView
         
         var yPos: CGFloat = 460
@@ -2191,41 +2233,37 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         guard let selectedItem = sender.selectedItem,
               let mode = selectedItem.representedObject as? ThemeMode else { return }
         
+        print("🎨 用户选择主题模式: \(mode.displayName)")
+        
         currentThemeMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: "themeMode")
         
+        print("🎨 当前主题状态 - Mode: \(currentThemeMode.displayName), currentDarkMode: \(currentDarkMode)")
+        
         updateThemeForMode(mode)
+        
+        // 立即更新设置窗口以确保主题变化生效
+        DispatchQueue.main.async {
+            if let settingsWindow = self.settingsWindow {
+                self.updateWindowTheme(settingsWindow)
+                self.setupSettingsUI()
+                print("🎨 设置窗口主题已立即更新")
+            }
+        }
     }
     
     private func updateThemeForMode(_ mode: ThemeMode) {
-        switch mode {
-        case .auto:
-            // 跟随系统主题
+        print("🎨 应用主题模式: \(mode.displayName)")
+        
+        // 确保主题观察器在自动模式下启用
+        if mode == .auto {
             setupThemeObserver()
-            updateTheme()
-        case .light:
-            forceTheme(.aqua)
-        case .dark:
-            forceTheme(.darkAqua)
         }
-    }
-    
-    private func forceTheme(_ appearance: NSAppearance.Name) {
-        if #available(macOS 10.14, *) {
-            window?.appearance = NSAppearance(named: appearance)
-            settingsWindow?.appearance = NSAppearance(named: appearance)
-            permissionWindow?.appearance = NSAppearance(named: appearance)
-        }
+        
+        // 统一通过 updateTheme() 来应用主题，它会根据 currentThemeMode 自动设置正确的外观
         updateTheme()
     }
     
-    private var isDarkModeForced: Bool {
-        switch currentThemeMode {
-        case .dark: return true
-        case .light: return false
-        case .auto: return isDarkMode
-        }
-    }
     
     // MARK: - 全局快捷键
     @objc private func toggleHotKey(_ sender: NSButton) {
@@ -2553,10 +2591,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     private func loadUserPreferences() {
         print("🔧 加载用户偏好设置...")
         
-        // 加载主题设置
+        // 加载主题设置（但不立即应用，等窗口创建后再应用）
         let themeString = UserDefaults.standard.string(forKey: "themeMode") ?? ThemeMode.auto.rawValue
         currentThemeMode = ThemeMode(rawValue: themeString) ?? .auto
-        print("🎨 主题模式: \(currentThemeMode.displayName)")
+        print("🎨 主题模式已加载: \(currentThemeMode.displayName)")
         
         // 加载快捷键设置
         loadHotKeyPreferences()
