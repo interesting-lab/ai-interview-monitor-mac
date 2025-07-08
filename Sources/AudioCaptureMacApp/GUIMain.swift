@@ -249,12 +249,51 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         hideDockIcon()
         
         setupThemeObserver()
+        setupPermissionMonitoring()
         loadUserPreferences()
         setupStatusBar()
         createMainWindow()
         checkInitialPermissions()
         startClipboardMonitoring()
         logMessage("应用程序已启动")
+    }
+    
+    private func setupPermissionMonitoring() {
+        // 设置权限状态监听定时器
+        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.checkPermissionStatusChanges()
+        }
+        print("📡 权限监听已启动")
+    }
+    
+    private func checkPermissionStatusChanges() {
+        let currentMicStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        let currentScreenStatus = checkScreenRecordingPermission()
+        
+        // 检查是否权限被撤销
+        if currentMicStatus == .denied || currentMicStatus == .restricted {
+            if !isShowingPermissionScreen {
+                print("🚨 检测到麦克风权限被撤销，显示权限界面")
+                DispatchQueue.main.async {
+                    self.forceShowPermissionScreen()
+                }
+            }
+        }
+        
+        if !currentScreenStatus && !isShowingPermissionScreen {
+            print("🚨 检测到屏幕录制权限被撤销，显示权限界面")
+            DispatchQueue.main.async {
+                self.forceShowPermissionScreen()
+            }
+        }
+        
+        // 检查是否权限已恢复
+        if currentMicStatus == .authorized && currentScreenStatus && isShowingPermissionScreen {
+            print("✅ 检测到权限已恢复，切换到主界面")
+            DispatchQueue.main.async {
+                self.setupMainInterface()
+            }
+        }
     }
     
     private func setupThemeObserver() {
@@ -658,15 +697,19 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         // 检查是否是第一次启动
         let isFirstLaunch = !UserDefaults.standard.bool(forKey: "hasLaunchedBefore")
         
-        // 显示主窗口
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        
+        // 关闭权限窗口
         if let permissionWindow = permissionWindow {
             permissionWindow.close()
             self.permissionWindow = nil
         }
         isShowingPermissionScreen = false
+        
+        // 恢复状态栏应用模式
+        restoreStatusBarMode()
+        
+        // 显示主窗口
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         
         // 确保主题正确设置
         updateTheme()
@@ -689,6 +732,16 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         }
         
         print("✅ 主界面设置完成")
+    }
+    
+    private func restoreStatusBarMode() {
+        print("🔄 恢复状态栏应用模式...")
+        
+        // 延迟恢复状态栏模式，让主窗口有时间显示
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            NSApp.setActivationPolicy(.accessory)
+            print("✅ 已恢复状态栏应用模式")
+        }
     }
     
     private func showPermissionScreen() {
@@ -716,11 +769,43 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         permissionWindow.minSize = NSSize(width: 500, height: 360)
         permissionWindow.maxSize = NSSize(width: 500, height: 360)
         
+        // 设置窗口层级为最前方显示，确保权限窗口始终可见
+        permissionWindow.level = .floating
+        permissionWindow.hidesOnDeactivate = false
+        
         // 设置动态主题
         updateWindowTheme(permissionWindow)
         
         setupPermissionUI()
+        
+        // 强制显示在最前方并激活应用
+        bringPermissionWindowToFront()
+    }
+    
+    private func bringPermissionWindowToFront() {
+        guard let permissionWindow = permissionWindow else { return }
+        
+        print("🔼 强制显示权限窗口在最前方...")
+        
+        // 1. 强制激活应用程序
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        
+        // 2. 显示窗口并置于最前
         permissionWindow.makeKeyAndOrderFront(nil)
+        permissionWindow.orderFrontRegardless()
+        
+        // 3. 确保窗口获得焦点
+        permissionWindow.makeKey()
+        permissionWindow.makeMain()
+        
+        print("✅ 权限窗口已强制显示在最前方")
+        
+        // 延迟一点后再恢复状态栏应用模式（如果需要的话）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // 保持 .regular 模式直到权限配置完成，这样确保权限窗口始终可见
+            print("🔒 保持应用为前台模式以确保权限窗口可见")
+        }
     }
     
     private func setupPermissionUI() {
@@ -892,6 +977,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func showScreenRecordingPermissionAlert() {
+        // 先确保权限窗口显示在最前方
+        forceShowPermissionScreen()
+        
         let alert = NSAlert()
         alert.messageText = "需要屏幕录制权限"
         alert.informativeText = "为了捕获系统音频，本应用需要屏幕录制权限。\n\n请在系统设置中手动授予权限：\n1. 打开系统设置\n2. 前往隐私与安全性 > 屏幕录制\n3. 找到并勾选本应用"
@@ -906,6 +994,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         switch response {
         case .alertFirstButtonReturn:
             openScreenRecordingPreferences()
+            // 打开设置后，确保权限窗口仍在最前方
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.bringPermissionWindowToFront()
+            }
         case .alertSecondButtonReturn:
             logMessage("⚠️ 用户选择稍后设置屏幕录制权限")
         case .alertThirdButtonReturn:
@@ -929,7 +1021,14 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     @objc private func checkPermissionStatus() {
-        checkInitialPermissions()
+        // 立即检查权限状态并更新UI
+        checkPermissionStatusChanges()
+        setupPermissionUI()
+        
+        // 确保权限窗口在最前方
+        if isShowingPermissionScreen {
+            bringPermissionWindowToFront()
+        }
     }
     
     @objc private func showHelp() {
@@ -980,14 +1079,23 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                     print("❌ 麦克风权限被拒绝")
                     self.logMessage("❌ 麦克风权限被拒绝")
                     
-                    // 如果显示权限界面，更新界面状态
-                    if self.isShowingPermissionScreen {
-                        self.setupPermissionUI()
-                    } else {
-                        self.showPermissionGuideAlert()
-                    }
+                    // 权限被拒绝时，强制显示权限界面
+                    self.forceShowPermissionScreen()
                 }
             }
+        }
+    }
+    
+    private func forceShowPermissionScreen() {
+        print("🚨 权限被拒绝，强制显示权限界面...")
+        
+        // 如果权限窗口已存在，确保它显示在最前方
+        if isShowingPermissionScreen && permissionWindow != nil {
+            setupPermissionUI()
+            bringPermissionWindowToFront()
+        } else {
+            // 如果权限窗口不存在，创建并显示
+            showPermissionScreen()
         }
     }
     
@@ -1005,6 +1113,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     private func showPermissionGuideAlert() {
+        // 先确保权限窗口显示在最前方
+        forceShowPermissionScreen()
+        
         let alert = NSAlert()
         alert.messageText = "需要麦克风权限"
         alert.informativeText = "为了正常使用音频捕获功能，请在系统设置中授予本应用麦克风权限。\n\n步骤：\n1. 点击下方\"打开系统设置\"按钮\n2. 在隐私与安全性 > 麦克风中找到本应用\n3. 勾选旁边的复选框以授予权限\n4. 重启应用以使权限生效"
@@ -1024,6 +1135,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         case .alertFirstButtonReturn:
             // 打开系统设置
             openSystemPreferences()
+            // 打开设置后，确保权限窗口仍在最前方
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.bringPermissionWindowToFront()
+            }
         case .alertSecondButtonReturn:
             // 稍后设置，记录日志
             logMessage("⚠️ 用户选择稍后设置权限")
@@ -2914,6 +3029,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     
     func applicationWillTerminate(_ notification: Notification) {
         print("🛑 应用即将退出，清理资源...")
+        
+        // 恢复正常应用模式
+        NSApp.setActivationPolicy(.regular)
         
         // 清理状态栏图标
         if let statusItem = statusItem {
