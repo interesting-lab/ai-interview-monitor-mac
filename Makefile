@@ -1,6 +1,6 @@
 .PHONY: build run run-gui run-cli debug debug-gui debug-cli clean install
 
-APP_NAME = AudioCaptureMacApp
+APP_NAME = 拾问AI助手-monitor
 BUILD_DIR = .build
 INSTALL_DIR = /Applications
 

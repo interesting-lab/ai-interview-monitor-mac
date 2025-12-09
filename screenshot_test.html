@@ -174,7 +174,17 @@
             log('正在连接到服务器...', 'info');
             
             try {
-                ws = new WebSocket('ws://localhost:9047/ws');
+                // 获取当前主机名和端口
+                const currentHost = window.location.hostname || 'localhost';
+                
+                // 根据当前协议决定使用WS还是WSS
+                const isSecure = window.location.protocol === 'https:';
+                const wsProtocol = isSecure ? 'wss://' : 'ws://';
+                const wsPort = isSecure ? '9048' : '9047';
+                
+                // 创建WebSocket连接
+                ws = new WebSocket(`${wsProtocol}${currentHost}:${wsPort}/ws`);
+                log(`🔌 正在连接到 ${wsProtocol}${currentHost}:${wsPort}/ws`, 'info');
                 
                 ws.onopen = function(event) {
                     isConnected = true;

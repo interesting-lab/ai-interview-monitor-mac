@@ -9,6 +9,8 @@ import AudioToolbox
 import ScreenCaptureKit
 import Carbon
 import ApplicationServices
+import NIOSSL
+import Combine
 
 // MARK: - 数据结构定义
 struct AudioDataEvent: Content {
@@ -16,6 +18,11 @@ struct AudioDataEvent: Content {
     let payload: AudioPayload
     let type: String?
     let wsEventType: String
+}
+
+// 添加HTML响应数据结构
+struct HTMLResponse: Content {
+    let html: String
 }
 
 struct AudioPayload: Content {
@@ -128,6 +135,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     private var permissionWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var isShowingPermissionScreen = false
+    
+    // 更新管理器
+    private let updateManager = UpdateManager.shared
+    private var updateCancellables = Set<AnyCancellable>()
     
     // 全局快捷键相关
     private var globalHotKey: Any?
@@ -244,6 +255,9 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     private var clipboardTimer: Timer?
     private var lastClipboardContent: String = ""
     
+    // 添加HTTPS服务器实例
+    private var httpsApp: Application?
+    
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 动态隐藏Dock图标
         hideDockIcon()
@@ -255,7 +269,50 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         createMainWindow()
         checkInitialPermissions()
         startClipboardMonitoring()
+        setupUpdateManager()
         logMessage("应用程序已启动")
+    }
+    
+    private func setupUpdateManager() {
+        // 绑定更新管理器的状态变化
+        updateManager.$hasUpdate
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] hasUpdate in
+                self?.updateNewVersionButtonState(hasUpdate: hasUpdate)
+            }
+            .store(in: &updateCancellables)
+        
+        updateManager.$isChecking
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isChecking in
+                self?.updateNewVersionButtonState(isChecking: isChecking)
+            }
+            .store(in: &updateCancellables)
+        
+        // 启动时检查一次更新（如果配置允许）
+        if UpdateConfig.checkOnLaunch {
+            Task {
+                await updateManager.checkForUpdates()
+            }
+        }
+        
+        print("✅ 更新管理器已设置")
+    }
+    
+    private func updateNewVersionButtonState(hasUpdate: Bool = false, isChecking: Bool = false) {
+        if isChecking {
+            newVersionButton.title = "检查中..."
+            newVersionButton.isEnabled = false
+        } else if hasUpdate {
+            newVersionButton.title = "发现新版本"
+            newVersionButton.isEnabled = true
+            // 可以改变按钮颜色来突出显示
+            newVersionButton.contentTintColor = NSColor.systemGreen
+        } else {
+            newVersionButton.title = "检查更新"
+            newVersionButton.isEnabled = true
+            newVersionButton.contentTintColor = nil
+        }
     }
     
     private func setupPermissionMonitoring() {
@@ -355,6 +412,11 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         permissionItem.target = self
         menu.addItem(permissionItem)
         
+        // 检查更新
+        let updateItem = NSMenuItem(title: "检查更新", action: #selector(checkForUpdates), keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(updateItem)
+        
         menu.addItem(NSMenuItem.separator())
         
         // 关于
@@ -433,6 +495,12 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     @objc private func openHotKeySettings() {
         showMainWindow()
         // 这里可以直接跳转到快捷键设置区域
+    }
+    
+    @objc private func checkForUpdates() {
+        Task {
+            await updateManager.checkForUpdates()
+        }
     }
     
     @objc private func showAbout() {
@@ -1174,7 +1242,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             defer: false
         )
         
-        window.title = "Interesting Lab"
+        window.title = "拾问AI助手-monitor"
         window.center()
         window.delegate = self
         window.isReleasedWhenClosed = false
@@ -1548,7 +1616,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         containerView.addSubview(buttonGroup)
         
         newVersionButton = NSButton(frame: NSRect(x: 10, y: 4, width: 74, height: 20))
-        newVersionButton.title = "使用新版"
+        newVersionButton.title = "检查更新"
         newVersionButton.bezelStyle = NSButton.BezelStyle.rounded
         newVersionButton.target = self
         newVersionButton.action = #selector(useNewVersion)
@@ -1776,6 +1844,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                 // 创建新的应用实例
                 let app = try await Application.make(.detect())
                 
+                // 配置HTTP和WebSocket服务
                 try await configure(app)
                 
                 // 启动音频捕获系统
@@ -1789,13 +1858,48 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                     }
                 }
                 
-                // 启动服务器但不使用execute()，避免命令行冲突
+                // 启动HTTP服务器（不使用execute()，避免命令行冲突）
                 try await app.server.start(address: .hostname("0.0.0.0", port: 9047))
+                
+                // 启动HTTPS服务器
+                let httpsApp = try await Application.make(.detect())
+                
+                // 获取证书文件路径
+                let certPath: String
+                let keyPath: String
+                
+                if let bundlePath = Bundle.main.resourcePath {
+                    // 如果在app包内运行，使用Resources目录中的证书
+                    certPath = "\(bundlePath)/cert.pem"
+                    keyPath = "\(bundlePath)/key.pem"
+                } else {
+                    // 如果在开发环境运行，使用当前目录中的证书
+                    certPath = "cert.pem"
+                    keyPath = "key.pem"
+                }
+                
+                print("📄 证书路径: \(certPath)")
+                print("🔑 密钥路径: \(keyPath)")
+                
+                // 配置HTTPS设置
+                let privateKey = try NIOSSLPrivateKey(file: keyPath, format: .pem)
+                httpsApp.http.server.configuration.tlsConfiguration = TLSConfiguration.makeServerConfiguration(
+                    certificateChain: try NIOSSLCertificate.fromPEMFile(certPath).map { .certificate($0) },
+                    privateKey: .privateKey(privateKey)
+                )
+                
+                // 配置HTTPS服务
+                try await configureHttps(httpsApp)
+                
+                // 启动HTTPS服务器
+                try await httpsApp.server.start(address: .hostname("0.0.0.0", port: 9048))
                 
                 await MainActor.run {
                     self.app = app
+                    self.httpsApp = httpsApp
                     self.updateServiceStatus(isRunning: true, isStarting: false)
-                    self.logMessage("✅ 服务器已在端口 9047 启动")
+                    self.logMessage("✅ HTTP 服务器已在端口 9047 启动")
+                    self.logMessage("✅ HTTPS 服务器已在端口 9048 启动")
                     
                     // 获取所有网络接口
                     let networkIPs = getNetworkInterfaces()
@@ -1803,8 +1907,10 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                     for ip in networkIPs {
                         self.logMessage("   • HTTP: http://\(ip):9047")
                         self.logMessage("   • WebSocket: ws://\(ip):9047/ws")
-                        self.logMessage("   • 健康检查: http://\(ip):9047/health")
-                        self.logMessage("   • 配置信息: http://\(ip):9047/config")
+                        self.logMessage("   • HTTPS: https://\(ip):9048")
+                        self.logMessage("   • 安全WebSocket: wss://\(ip):9048/ws")
+                        self.logMessage("   • 健康检查: https://\(ip):9048/health")
+                        self.logMessage("   • 配置信息: https://\(ip):9048/config")
                         if ip != networkIPs.last {
                             self.logMessage("   ----")
                         }
@@ -1816,7 +1922,6 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
                 }
                 
                 // 保持服务器运行，直到任务被取消
-                // 不在这里调用 asyncShutdown，让停止逻辑统一处理
                 while !Task.isCancelled {
                     if #available(macOS 13.0, *) {
                         try await Task.sleep(for: .seconds(1))
@@ -1857,9 +1962,16 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             
             // 停止Vapor服务器（不完全关闭应用）
             if let app = self.app {
-                print("🛑 停止 Vapor 服务器...")
+                print("🛑 停止 HTTP 服务器...")
                 await app.server.shutdown()
-                print("✅ Vapor 服务器已停止")
+                print("✅ HTTP 服务器已停止")
+            }
+            
+            // 停止HTTPS服务器
+            if let httpsApp = self.httpsApp {
+                print("🛑 停止 HTTPS 服务器...")
+                await httpsApp.server.shutdown()
+                print("✅ HTTPS 服务器已停止")
             }
             
             await MainActor.run {
@@ -1886,7 +1998,17 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
     }
     
     @objc private func useNewVersion() {
-        logMessage("🆕 使用新版功能")
+        if updateManager.hasUpdate {
+            logMessage("🆕 开始更新到版本 \(updateManager.updateInfo?.version ?? "")")
+            Task {
+                await updateManager.downloadAndInstallUpdate()
+            }
+        } else {
+            logMessage("🆕 检查更新")
+            Task {
+                await updateManager.checkForUpdates()
+            }
+        }
     }
     
     @objc private func showQRCode() {
@@ -1901,6 +2023,8 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
             let prefix = index == 0 ? "主要地址: " : "备用地址: "
             addressText += "\(prefix)http://\(ip):9047\n"
             addressText += "WebSocket: ws://\(ip):9047/ws\n"
+            addressText += "HTTPS: https://\(ip):9048\n"
+            addressText += "安全WebSocket: wss://\(ip):9048/ws\n"
             if index < networkIPs.count - 1 {
                 addressText += "\n"
             }
@@ -1909,7 +2033,7 @@ class AudioServerApp: NSObject, NSApplicationDelegate {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(addressText, forType: .string)
-        logMessage("📋 已复制所有服务器地址到剪贴板（包含WebSocket地址）")
+        logMessage("📋 已复制所有服务器地址到剪贴板（包含HTTP/HTTPS和WebSocket地址）")
     }
     
     @objc private func openSettings() {
@@ -3138,6 +3262,156 @@ func configure(_ app: Application) async throws {
     // 注册路由
     try routes(app)
 }
+
+// HTTPS服务器配置
+func configureHttps(_ app: Application) async throws {
+    // 配置CORS
+    let corsConfiguration = CORSMiddleware.Configuration(
+        allowedOrigin: .all,
+        allowedMethods: [.GET, .POST, .PUT, .OPTIONS, .DELETE, .PATCH],
+        allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith, .userAgent, .accessControlAllowOrigin]
+    )
+    let cors = CORSMiddleware(configuration: corsConfiguration)
+    app.middleware.use(cors, at: .beginning)
+    
+    // 注册HTTPS路由
+    try httpsRoutes(app)
+}
+
+func httpsRoutes(_ app: Application) throws {
+    // 健康检查
+    app.get("health") { req -> HealthResponse in
+        return HealthResponse(
+            data: HealthData(ok: true),
+            success: true
+        )
+    }
+    
+    // 配置信息
+    app.get("config") { req -> ConfigResponse in
+        return ConfigResponse(
+            data: ConfigData(
+                audioConfig: AudioConfig(
+                    bufferDurationMs: 50.0,
+                    sampleRate: 16000.0
+                ),
+                deviceInfo: DeviceInfo(
+                    build: "15",
+                    id: getDeviceId(),
+                    name: getDeviceName(),
+                    platform: "macos",
+                    version: "2.1.0"
+                )
+            ),
+            success: true
+        )
+    }
+    
+    // WebSocket连接 - 兼容多个路径
+    let websocketHandler: @Sendable (Request, WebSocket) async -> Void = { req, ws in
+        print("🔗 新的安全WebSocket连接 (WSS)")
+        
+        if #available(macOS 12.3, *) {
+            await AudioCapture.shared.addWebSocket(ws)
+        }
+        
+        // 发送欢迎消息
+        try? await ws.send("Connected to Audio Capture Service (Secure)")
+        
+        ws.onClose.whenComplete { result in
+            print("🔌 安全WebSocket连接已关闭")
+            if #available(macOS 12.3, *) {
+                Task {
+                    await AudioCapture.shared.removeWebSocket(ws)
+                }
+            }
+        }
+        
+        // 在WebSocket的事件循环中设置文本消息处理器
+        ws.eventLoop.execute {
+            ws.onText { ws, text in
+                Task {
+                    await handleWebSocketMessage(ws: ws, text: text)
+                }
+            }
+        }
+    }
+    
+    // 支持多个WebSocket路径
+    app.webSocket("audio", onUpgrade: websocketHandler)
+    app.webSocket("ws", onUpgrade: websocketHandler)
+    
+    // 基本状态检查路由
+    app.get { req -> Response in
+        // 显示连接成功的HTML页面
+        let htmlContent = """
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>证书安装成功</title>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    margin: 0;
+                    background-color: #f7f7f7;
+                    text-align: center;
+                }
+                h1 {
+                    font-size: 32px;
+                    font-weight: bold;
+                    margin-bottom: 20px;
+                }
+                p {
+                    font-size: 18px;
+                    margin-bottom: 40px;
+                }
+                button {
+                    background-color: #000;
+                    color: #fff;
+                    border: none;
+                    border-radius: 50px;
+                    padding: 15px 60px;
+                    font-size: 18px;
+                    cursor: pointer;
+                    margin-bottom: 30px;
+                }
+                .hint {
+                    color: #999;
+                    font-size: 14px;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>证书安装成功</h1>
+            <p>拾问局域网服务已可用</p>
+            <button onclick="window.close()">我知道了</button>
+            <div class="hint">若点击上方按钮无反应，可直接手动关闭此页面</div>
+        </body>
+        </html>
+        """
+        
+        var headers = HTTPHeaders()
+        headers.add(name: .contentType, value: "text/html; charset=utf-8")
+        
+        return Response(
+            status: .ok,
+            headers: headers,
+            body: Response.Body(string: htmlContent)
+        )
+    }
+}
+
+// 添加需要的属性
+private var httpsApp: Application?
+
+// ... rest of the existing code ...
 
 func routes(_ app: Application) throws {
     // 健康检查
