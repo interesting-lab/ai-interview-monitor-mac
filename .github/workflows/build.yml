@@ -1,0 +1,47 @@
+name: macOS Build & Package
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      - name: Build app and DMG
+        run: |
+          chmod +x build_app.sh
+          ./build_app.sh
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-bundle
+          path: "拾问AI助手-monitor.app"
+
+      - name: Upload DMG installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-dmg
+          path: "拾问AI助手-monitor.dmg"
+
