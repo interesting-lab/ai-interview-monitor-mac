@@ -5,7 +5,7 @@ import Vapor
 import ScreenCaptureKit
 
 // 让WebSocket可以在Set中使用
-extension WebSocket: @retroactive Hashable {
+extension WebSocket: Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(ObjectIdentifier(self))
     }
@@ -38,8 +38,8 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         }
         
         // 监听WebSocket关闭事件
-        webSocket.onClose.whenComplete { [weak self] _ in
-            Task {
+        webSocket.onClose.whenComplete { [weak self] result in
+            Task { [weak self] in
                 await self?.removeWebSocket(webSocket)
             }
         }
@@ -147,23 +147,15 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         configuration.queueDepth = 8
         
-        if #available(macOS 15.0, *) {
-            if let defaultMicrophone = AVCaptureDevice.default(for: .audio) {
-                configuration.captureMicrophone = true
-                configuration.microphoneCaptureDeviceID = defaultMicrophone.uniqueID
-                print("🎤 使用内置麦克风: \(defaultMicrophone.localizedName)")
-            }
-        }
-        
         captureStream = SCStream(filter: filter, configuration: configuration, delegate: self)
         
         if #available(macOS 13.0, *) {
             try captureStream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue.global(qos: .userInteractive))
         }
         
-        if #available(macOS 15.0, *) {
-            try captureStream?.addStreamOutput(self, type: .microphone, sampleHandlerQueue: DispatchQueue.global(qos: .userInteractive))
-        }
+        // 注意：ScreenCaptureKit 目前不支持直接捕获麦克风
+        // 麦克风捕获使用 AVAudioEngine 实现（见 setupMicrophoneCapture 方法）
+        print("ℹ️ 使用 AVAudioEngine 进行麦克风捕获")
         
         print("🚀 启动ScreenCaptureKit捕获...")
         try await captureStream?.startCapture()
@@ -171,25 +163,24 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
     }
     
     private func setupMicrophoneCapture() async throws {
-        if #unavailable(macOS 15.0) {
-            micAudioEngine = AVAudioEngine()
-            
-            guard let micAudioEngine = micAudioEngine else { return }
-            
-            let inputNode = micAudioEngine.inputNode
-            let inputFormat = inputNode.outputFormat(forBus: 0)
-            
-            print("🎤 麦克风格式: \(inputFormat)")
-            
-            // 使用硬件原生格式，避免格式不匹配问题，增加缓冲区大小
-            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer, time) in
-                self?.processMicrophoneAudio(buffer: buffer)
-            }
-            
-            micAudioEngine.prepare()
-            try micAudioEngine.start()
-            print("✅ AVAudioEngine麦克风捕获已启动")
+        // 使用 AVAudioEngine 进行麦克风捕获（所有 macOS 版本）
+        micAudioEngine = AVAudioEngine()
+        
+        guard let micAudioEngine = micAudioEngine else { return }
+        
+        let inputNode = micAudioEngine.inputNode
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        
+        print("🎤 麦克风格式: \(inputFormat)")
+        
+        // 使用硬件原生格式，避免格式不匹配问题，增加缓冲区大小
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer, time) in
+            self?.processMicrophoneAudio(buffer: buffer)
         }
+        
+        micAudioEngine.prepare()
+        try micAudioEngine.start()
+        print("✅ AVAudioEngine麦克风捕获已启动")
     }
     
     private func processMicrophoneAudio(buffer: AVAudioPCMBuffer) {
@@ -451,9 +442,9 @@ class AudioCapture: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDeleg
             break
         case .audio:
             processSystemAudioSample(sampleBuffer: sampleBuffer)
-        case .microphone:
-            processMicrophoneAudioSample(sampleBuffer: sampleBuffer)
         @unknown default:
+            // 注意：ScreenCaptureKit 目前不支持 .microphone 类型
+            // 麦克风捕获使用 AVAudioEngine 实现
             break
         }
     }
