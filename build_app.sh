@@ -100,20 +100,32 @@ echo "✅ DMG安装包创建完成！"
 echo "📍 位置: $(pwd)/${DMG_NAME}"
 echo ""
 
-# 代码签名 - 解决每次都要求权限的问题
+# 代码签名 - 尽量使用固定证书，避免 TCC 反复弹窗
 echo "🔐 开始代码签名..."
 SIGN_RESULT=0
 
-# 尝试使用开发者证书签名
-DEV_CERT=$(security find-identity -p codesigning -v | grep "Developer ID Application" | head -1 | cut -d'"' -f2)
-if [ ! -z "$DEV_CERT" ]; then
-    echo "📝 使用开发者证书签名: $DEV_CERT"
-    codesign --force --deep --sign "$DEV_CERT" "${APP_NAME}.app"
+# 如果设置了环境变量 CODESIGN_ID，则优先使用
+if [ -n "$CODESIGN_ID" ]; then
+    echo "📝 使用环境变量证书签名: $CODESIGN_ID"
+    KEYCHAIN_OPT=()
+    # 可选：指定 keychain 路径（例如 CI 中创建的临时 keychain）
+    if [ -n "$CODESIGN_KEYCHAIN" ]; then
+        KEYCHAIN_OPT=(--keychain "$CODESIGN_KEYCHAIN")
+    fi
+    codesign --force --deep --options runtime "${KEYCHAIN_OPT[@]}" --sign "$CODESIGN_ID" "${APP_NAME}.app"
     SIGN_RESULT=$?
 else
-    echo "📝 使用临时签名（仅本机有效）"
-    codesign --force --deep --sign - "${APP_NAME}.app"
-    SIGN_RESULT=$?
+    # 尝试自动寻找 Developer ID 证书
+    DEV_CERT=$(security find-identity -p codesigning -v | grep "Developer ID Application" | head -1 | cut -d'"' -f2)
+    if [ ! -z "$DEV_CERT" ]; then
+        echo "📝 使用开发者证书签名: $DEV_CERT"
+        codesign --force --deep --options runtime --sign "$DEV_CERT" "${APP_NAME}.app"
+        SIGN_RESULT=$?
+    else
+        echo "📝 未提供证书，使用临时签名（仅本机有效，TCC 可能反复弹窗）"
+        codesign --force --deep --sign - "${APP_NAME}.app"
+        SIGN_RESULT=$?
+    fi
 fi
 
 if [ $SIGN_RESULT -eq 0 ]; then
